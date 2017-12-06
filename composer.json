@@ -1,15 +1,20 @@
 {
-    "name": "nfarring/redisrpc",
+    "name": "wolph/redisrpc",
     "type": "library",
     "description": "Lightweight RPC for Redis",
     "keywords": ["redis", "rpc"],
-    "homepage": "http://github.com/nfarring/redisrpc",
+    "homepage": "http://github.com/WoLpH/redisrpc",
     "license": "PHP",
     "authors": [
         {
             "name": "Nathan Farrington",
             "email": "nfarring@gmail.com",
             "homepage": "http://nathanfarrington.com"
+        },
+        {
+            "name": "Rick van Hattem",
+            "email": "wolph@wol.ph",
+            "homepage": "https://wol.ph/"
         }
     ],
     "repositories": [
