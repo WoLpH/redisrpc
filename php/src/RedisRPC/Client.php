@@ -14,9 +14,9 @@
 # 
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
 namespace RedisRPC;
 
+use Predis;
 use RedisRPC\RemoteException;
 
 # Ref: http://www.php.net/manual/en/language.constants.php
@@ -70,13 +70,12 @@ function random_string($size, $valid_chars='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij
  */
 class Client {
 
-    private $redis_server;
+    private $redis_args;
     private $message_queue;
 
-    public function __construct($redis_server, $message_queue, $timeout = 0) {
-        $this->redis_server = $redis_server;
+    public function __construct($redis_args, $message_queue) {
+        $this->redis_args = $redis_args;
         $this->message_queue = $message_queue;
-        $this->timeout = $timeout;
     }
 
     public function __call($name, $arguments) {
@@ -84,33 +83,62 @@ class Client {
         # Send the RPC Request to Redis.
         # Block on the RPC Response from Redis.
         # Extract the return value.
-        $function_call = array('name' => $name);
-        if (count($arguments) > 0) {
-            $function_call['args'] = $arguments;
-        }
-        $response_queue = "$this->message_queue:rpc:" . random_string(8);
+        $response_queue = $this->message_queue . ':rpc:' . random_string(8);
         $rpc_request = array(
-            'function_call' => $function_call,
+            'function_call' => array(
+                'name' => $name,
+                'args' => $arguments,
+            ),
             'response_queue' => $response_queue
         );
-        $message = json_encode($rpc_request);
-        debug_print("RPC Request: $message");
-        $this->redis_server->rpush($this->message_queue, $message);
-        $result = $this->redis_server->blpop($response_queue, $this->timeout);
-        if ($result == NULL) {
-            throw new TimeoutException();
+        $request = json_encode($rpc_request);
+        debug_print("RPC Request: $request");
+
+        $redis_server = new Predis\Client($this->redis_args);
+        $redis_pubsub_server = new Predis\Client($this->redis_args);
+        $pubsub = $redis_pubsub_server->pubSubLoop();
+
+        $subscribers = $redis_server->pubsub('numsub', $this->message_queue);
+        if($subscribers[$this->message_queue] == 0){
+            throw new \RuntimeException('No servers available for queue ' .
+                $this->message_queue);
         }
-        list($message_queue, $message) = $result;
-        assert($message_queue == $response_queue);
-        debug_print("RPC Response: $message\n");
-        $rpc_response = json_decode($message);
-        if (array_key_exists('exception',$rpc_response) && $rpc_response->exception != NULL) {
-            throw new RemoteException($rpc_response->exception);
+
+        $pubsub->subscribe($response_queue);
+        $redis_server->publish($this->message_queue, $request);
+
+        $response = null;
+        foreach($pubsub as $message){
+            if($message->kind == 'message'){
+                assert($message->channel == $response_queue);
+                $response = $message;
+                $pubsub->unsubscribe($response_queue);
+            }
+            debug_print('Ignoring ' . $message->kind . ': ' . $message->payload);
+        }
+
+        debug_print('RPC Response: ' . $response->payload . PHP_EOL);
+        $rpc_response = json_decode($response->payload);
+        if (array_key_exists('exception', $rpc_response) && $rpc_response->exception != NULL) {
+            $exception = new $rpc_response->exception_type($rpc_response->exception);
+
+            /* Convert json object to response object */
+            $response = new $rpc_response->response_type();
+			foreach($rpc_response->response as $key => $value){
+				$response->{$key} = $value;
+			}
+
+            $exception->setResponse($response);
+            throw $exception;
         }
         if (!array_key_exists('return_value',$rpc_response)) {
             throw new RemoteException('Malformed RPC Response message');
         }
-        return $rpc_response->return_value;
+        if(empty($rpc_response->return_type)){
+            return $rpc_response->return_value;
+        }else{
+            return $rpc_response->return_type($rpc_response->return_value);
+        }
     }
 }
 
