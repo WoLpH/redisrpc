@@ -61,7 +61,6 @@ class Server {
      * Starts the server.
      */
     public function run() {
-        $redis_server = new Predis\Client($this->redis_args);
         $redis_pubsub_server = new Predis\Client($this->redis_args);
         $pubsub = $redis_pubsub_server->pubSubLoop();
 
@@ -116,6 +115,7 @@ class Server {
 
             debug_print("RPC Response: $message");
             assert($redis_server->pubsub('numsub', $this->response_queue) > 0);
+            $redis_server = new Predis\Client($this->redis_args);
             $redis_server->publish($response_queue, $message);
         }
     }

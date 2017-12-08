@@ -187,9 +187,21 @@ class Client(object):
 
         logging.debug('RPC Response: %s' % response['data'])
         rpc_response = self.transport.loads(response['data'])
-        exception = rpc_response.get('exception')
-        if exception is not None:
-            raise RemoteException(exception)
+        if 'response' in rpc_response:
+            Response = type(str(rpc_response['response_type']), (object,), {})
+            response = Response()
+            response.__dict__ = rpc_response['response']
+        else:
+            response = None
+
+        if 'exception' in rpc_response:
+            Exception = RemoteException.from_name(
+                rpc_response['exception_type'])
+            exception = Exception(rpc_response['exception'])
+            exception.response = response
+
+            raise exception
+
         if 'return_value' not in rpc_response:
             raise RemoteException(
                 'Malformed RPC Response message: %s' %
@@ -236,9 +248,28 @@ class Server(object):
 
 class RemoteException(Exception):
     """Raised by an RPC client when an exception occurs on the RPC server."""
-    pass
+
+    exceptions = dict()
+
+    @classmethod
+    def from_name(cls, key, *keys):
+        key = tuple(str(key).replace('\\', '.').split('.'))
+
+        # Make sure to combine the keys if needed
+        keys = key[1:] + keys
+        key = keys[0]
+
+        if key not in cls.exceptions:
+            cls.exceptions[key] = type(key, (cls,), dict(parent=cls))
+
+        Exception = cls.exceptions[key]
+        if keys:
+            return Exception.from_name(*keys)
+        else:
+            return Exception
 
 
 class TimeoutException(Exception):
     """Raised by an RPC client when a timeout occurs."""
     pass
+
