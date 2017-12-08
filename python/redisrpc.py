@@ -257,7 +257,7 @@ class RemoteException(Exception):
 
         # Make sure to combine the keys if needed
         keys = key[1:] + keys
-        key = keys[0]
+        key = key[0]
 
         if key not in cls.exceptions:
             cls.exceptions[key] = type(key, (cls,), dict(parent=cls))
