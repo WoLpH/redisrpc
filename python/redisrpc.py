@@ -1,15 +1,15 @@
-# Copyright (C) 2012.  Nathan Farrington <nfarring@gmail.com>
-# 
+# Copyright (C) 2017.  Rick van Hattem <wolph@wol.ph>
+#
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
-# 
+#
 # This program is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU General Public License for more details.
-# 
+#
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
@@ -20,7 +20,6 @@ import pickle
 import random
 import string
 import sys
-
 import redis
 
 
@@ -33,6 +32,7 @@ __all__ = [
 
 if sys.version_info < (3,):
     range = xrange
+
 
 def random_string(size=8, chars=string.ascii_uppercase + string.digits):
     """Ref: http://stackoverflow.com/questions/2257441"""
@@ -79,15 +79,18 @@ class FunctionCall(dict):
     def as_python_code(self):
         """Return a string representation of this object that can be evaled to execute the function call."""
         argstring = '' if 'args' not in self else \
-                ','.join(str(arg) for arg in self['args'])
-        kwargstring = '' if 'kwargs' not in self else \
-                ','.join('%s=%s' % (key,val) for (key,val) in list(self['kwargs'].items()))
+            ','.join(str(arg) for arg in self['args'])
+        kwargstring = '' if 'kwargs' not in self else ','.join(
+            '%s=%s' %
+            (key, val) for (
+                key, val) in list(
+                self['kwargs'].items()))
         if len(argstring) == 0:
             params = kwargstring
         elif len(kwargstring) == 0:
             params = argstring
         else:
-            params = ','.join([argstring,kwargstring])
+            params = ','.join([argstring, kwargstring])
         return '%s(%s)' % (self['name'], params)
 
 
@@ -96,7 +99,7 @@ def decode_message(message):
     # Try JSON, then try Python pickle, then fail.
     try:
         return JSONTransport.create(), json.loads(message.decode())
-    except:
+    except BaseException:
         pass
     return PickleTransport.create(), pickle.loads(message)
 
@@ -104,13 +107,16 @@ def decode_message(message):
 class JSONTransport(object):
     """Cross platform transport."""
     _singleton = None
+
     @classmethod
     def create(cls):
         if cls._singleton is None:
             cls._singleton = JSONTransport()
         return cls._singleton
+
     def dumps(self, obj):
         return json.dumps(obj)
+
     def loads(self, obj):
         return json.loads(obj.decode())
 
@@ -118,22 +124,31 @@ class JSONTransport(object):
 class PickleTransport(object):
     """Only works with Python clients and servers."""
     _singleton = None
+
     @classmethod
     def create(cls):
         if cls._singleton is None:
             cls._singleton = PickleTransport()
         return cls._singleton
+
     def dumps(self, obj):
         # Version 2 works for Python 2.3 and later
         return pickle.dumps(obj, protocol=2)
+
     def loads(self, obj):
         return pickle.loads(obj)
- 
+
+
 class Client(object):
     """Calls remote functions using Redis as a message queue."""
 
-    def __init__(self, redis_server, message_queue, timeout=0, transport='json'):
-        self.redis_server = redis_server
+    def __init__(
+            self,
+            redis_args,
+            message_queue,
+            timeout=0,
+            transport='json'):
+        self.redis_args = redis_args
         self.message_queue = message_queue
         self.timeout = timeout
         if transport == 'json':
@@ -146,23 +161,39 @@ class Client(object):
     def call(self, method_name, *args, **kwargs):
         function_call = FunctionCall(method_name, args, kwargs)
         response_queue = self.message_queue + ':rpc:' + random_string()
-        rpc_request = dict(function_call=function_call, response_queue=response_queue)
+        rpc_request = dict(
+            function_call=function_call,
+            response_queue=response_queue,
+        )
         message = self.transport.dumps(rpc_request)
         logging.debug('RPC Request: %s' % message)
-        self.redis_server.rpush(self.message_queue, message)
-        result = self.redis_server.blpop(response_queue, self.timeout)
-        if result is None:
-            raise TimeoutException()
-        message_queue, message = result
-        message_queue = message_queue.decode()
-        assert message_queue == response_queue
-        logging.debug('RPC Response: %s' % message)
-        rpc_response = self.transport.loads(message)
+        redis_server = redis.StrictRedis(**self.redis_args)
+        redis_pubsub_server = redis.StrictRedis(**self.redis_args)
+        pubsub = redis_pubsub_server.pubsub()
+
+        subscribers = dict(redis_server.pubsub_numsub(self.message_queue))
+        if subscribers[self.message_queue] == 0:
+            raise RuntimeError('No servers available for queue %s' %
+                               self.message_queue)
+
+        pubsub.subscribe(response_queue)
+        redis_server.publish(self.message_queue, message)
+
+        for message in pubsub.listen():
+            if message['type'] == 'message':
+                assert message['channel'] == response_queue
+                response = message
+                pubsub.unsubscribe(response_queue)
+
+        logging.debug('RPC Response: %s' % response['data'])
+        rpc_response = self.transport.loads(response['data'])
         exception = rpc_response.get('exception')
         if exception is not None:
             raise RemoteException(exception)
         if 'return_value' not in rpc_response:
-            raise RemoteException('Malformed RPC Response message: %s' % rpc_response)
+            raise RemoteException(
+                'Malformed RPC Response message: %s' %
+                rpc_response)
         return rpc_response['return_value']
 
     def __getattr__(self, name):
@@ -173,27 +204,29 @@ class Client(object):
 class Server(object):
     """Executes function calls received from a Redis queue."""
 
-    def __init__(self, redis_server, message_queue, local_object):
-        self.redis_server = redis_server
+    def __init__(self, redis_args, message_queue, local_object):
+        self.redis_args = redis_args
         self.message_queue = message_queue
         self.local_object = local_object
- 
+
     def run(self):
         # Flush the message queue.
         self.redis_server.delete(self.message_queue)
         while True:
-            message_queue, message = self.redis_server.blpop(self.message_queue)
+            message_queue, message = self.redis_server.blpop(
+                self.message_queue)
             message_queue = message_queue.decode()
             assert message_queue == self.message_queue
             logging.debug('RPC Request: %s' % message)
             transport, rpc_request = decode_message(message)
             response_queue = rpc_request['response_queue']
-            function_call = FunctionCall.from_dict(rpc_request['function_call'])
+            function_call = FunctionCall.from_dict(
+                rpc_request['function_call'])
             code = 'self.return_value = self.local_object.' + function_call.as_python_code()
             try:
                 exec(code)
                 rpc_response = dict(return_value=self.return_value)
-            except:
+            except BaseException:
                 (type, value, traceback) = sys.exc_info()
                 rpc_response = dict(exception=repr(value))
             message = transport.dumps(rpc_response)
