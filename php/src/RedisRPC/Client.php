@@ -120,24 +120,31 @@ class Client {
         debug_print('RPC Response: ' . $response->payload . PHP_EOL);
         $rpc_response = json_decode($response->payload);
         if (array_key_exists('exception', $rpc_response) && $rpc_response->exception != NULL) {
-            $exception = new $rpc_response->exception_type($rpc_response->exception);
+            if(array_key_exists('exception_type', $rpc_response)){
+                $exception_type = $rpc_response->exception_type;
+                $exception = new $exception_type($rpc_response->exception);
 
-            /* Convert json object to response object */
-            $response = new $rpc_response->response_type();
-			foreach($rpc_response->response as $key => $value){
-				$response->{$key} = $value;
-			}
+                /* Convert json object to response object */
+                $response = new $rpc_response->response_type();
+			    foreach($rpc_response->response as $key => $value){
+				    $response->{$key} = $value;
+			    }
 
-            $exception->setResponse($response);
-            throw $exception;
+                $exception->setResponse($response);
+                throw $exception;
+            }else{
+                throw new \RuntimeException($rpc_response->exception);
+            }
         }
         if (!array_key_exists('return_value',$rpc_response)) {
             throw new RemoteException('Malformed RPC Response message');
         }
-        if(empty($rpc_response->return_type)){
-            return $rpc_response->return_value;
-        }else{
+        print_r($rpc_response);
+        if(array_key_exists('return_type', $rpc_response)
+                && $rpc_response->return_type){
             return $rpc_response->return_type($rpc_response->return_value);
+        }else{
+            return $rpc_response->return_value;
         }
     }
 }

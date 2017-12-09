@@ -96,8 +96,11 @@ class Server {
 
                     $rpc_response = array(
                         'return_value' => $return_value,
-                        'return_type' => get_class($return_value),
+                        'return_type' => gettype($return_value) == 'object'
+                        ? get_class($return_value)
+                        : null,
                     );
+                    print_r($rpc_response);
                 }catch (\Exception $e) {
                     $rpc_response = array(
                         'exception' => $e->getMessage(),

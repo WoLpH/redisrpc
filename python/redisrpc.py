@@ -68,16 +68,15 @@ class FunctionCall(dict):
         return FunctionCall(name, args, kwargs)
 
     def __init__(self, name, args=None, kwargs=None):
-        """Create a new FunctionCall from a method name, an optional argument tuple, and an optional keyword argument
-        dictionary."""
+        """Create a new FunctionCall from a method name, an optional argument
+        tuple, and an optional keyword argument dictionary."""
         self['name'] = name
-        if args is not None and args != ():
-            self['args'] = args
-        if kwargs is not None and kwargs != {}:
-            self['kwargs'] = kwargs
+        self['args'] = args or []
+        self['kwargs'] = kwargs or {}
 
     def as_python_code(self):
-        """Return a string representation of this object that can be evaled to execute the function call."""
+        """Return a string representation of this object that can be evaled to
+        execute the function call."""
         argstring = '' if 'args' not in self else \
             ','.join(str(arg) for arg in self['args'])
         kwargstring = '' if 'kwargs' not in self else ','.join(
