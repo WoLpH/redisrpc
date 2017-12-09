@@ -172,8 +172,8 @@ class Client(object):
 
         subscribers = dict(redis_server.pubsub_numsub(self.message_queue))
         if subscribers[self.message_queue] == 0:
-            raise RuntimeError('No servers available for queue %s' %
-                               self.message_queue)
+            raise NoServerAvailableException(
+                'No servers available for queue %s' % self.message_queue)
 
         pubsub.subscribe(response_queue)
         redis_server.publish(self.message_queue, message)
@@ -272,3 +272,6 @@ class TimeoutException(Exception):
     """Raised by an RPC client when a timeout occurs."""
     pass
 
+
+class NoServerAvailableException(Exception):
+    pass
