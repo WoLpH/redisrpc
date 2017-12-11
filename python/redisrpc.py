@@ -143,12 +143,12 @@ class Client(object):
 
     def __init__(
             self,
-            redis_args,
             message_queue,
+            redis_args=None,
             timeout=0,
             transport='json'):
-        self.redis_args = redis_args
         self.message_queue = message_queue
+        self.redis_args = redis_args or dict()
         self.timeout = timeout
         if transport == 'json':
             self.transport = JSONTransport()
@@ -167,14 +167,14 @@ class Client(object):
         message = self.transport.dumps(rpc_request)
         logging.debug('RPC Request: %s' % message)
         redis_server = redis.StrictRedis(**self.redis_args)
-        redis_pubsub_server = redis.StrictRedis(**self.redis_args)
-        pubsub = redis_pubsub_server.pubsub()
 
         subscribers = dict(redis_server.pubsub_numsub(self.message_queue))
-        if subscribers[self.message_queue] == 0:
+        if int(subscribers[self.message_queue]) == 0:
             raise NoServerAvailableException(
                 'No servers available for queue %s' % self.message_queue)
 
+        redis_pubsub_server = redis.StrictRedis(**self.redis_args)
+        pubsub = redis_pubsub_server.pubsub()
         pubsub.subscribe(response_queue)
         redis_server.publish(self.message_queue, message)
 
@@ -189,7 +189,8 @@ class Client(object):
         if 'response' in rpc_response:
             Response = type(str(rpc_response['response_type']), (object,), {})
             response = Response()
-            response.__dict__ = rpc_response['response']
+            if rpc_response['response'] is not None:
+                response.__dict__ = rpc_response['response']
         else:
             response = None
 

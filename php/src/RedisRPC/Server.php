@@ -62,6 +62,12 @@ class Server {
      */
     public function run() {
         $redis_pubsub_server = new Predis\Client($this->redis_args);
+        $subscribers = $redis_pubsub_server->pubsub('numsub', $this->message_queue);
+        if($subscribers[$this->message_queue] != 0){
+            throw new \RuntimeException('Server already running for queue ' .
+                $this->message_queue);
+        }
+
         $pubsub = $redis_pubsub_server->pubSubLoop();
 
         $pubsub->subscribe($this->message_queue);
@@ -97,14 +103,14 @@ class Server {
                     $rpc_response = array(
                         'return_value' => $return_value,
                         'return_type' => gettype($return_value) == 'object'
-                        ? get_class($return_value)
-                        : null,
+                        ? get_class($return_value) : null,
                     );
                     print_r($rpc_response);
                 }catch (\Exception $e) {
                     $rpc_response = array(
                         'exception' => $e->getMessage(),
-                        'exception_type' => get_class($e),
+                        'exception_type' => gettype($e) == 'object'
+                        ? get_class($e) : null,
                     );
                     if(method_exists($e, 'getResponse')){
                         $rpc_response['response'] = $e->getResponse();
