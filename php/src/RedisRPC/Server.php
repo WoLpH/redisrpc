@@ -41,20 +41,18 @@ if (!function_exists("debug_print")) {
 class Server {
 
     private $redis_args;
-    private $message_queue;
-    private $local_object;
+    private $local_objects;
 
     /**
      * Initializes a new server.
      *
      * @param mixed $redis_args Redis server arguments.
-     * @param string $message_queue Name of Redis message queue.
-     * @param mixed $local_object Handle to local wrapped object that will receive the RPC calls.
+     * @param mixed $local_object Handle to local wrapped objects as
+     *        associative array (key = queue name) that will receive the RPC calls.
      */
-    public function __construct($redis_args, $message_queue, $local_object) {
+    public function __construct($redis_args, $local_objects) {
         $this->redis_args = $redis_args;
-        $this->message_queue = $message_queue;
-        $this->local_object = $local_object;
+        $this->local_objects = $local_objects;
     }
 
     /**
@@ -64,7 +62,10 @@ class Server {
         $redis_pubsub_server = new Predis\Client($this->redis_args);
         $pubsub = $redis_pubsub_server->pubSubLoop();
 
-        $pubsub->subscribe($this->message_queue);
+        foreach($this->local_objects as $key => $local_object){
+            $pubsub->subscribe($key);
+        }
+
         foreach($pubsub as $message){
             # Pop a message from the queue.
             # Decode the message.
@@ -74,7 +75,8 @@ class Server {
                 continue;
             }
 
-            assert($message->channel == $this->message_queue);
+            // assert($message->channel == $this->message_queue);
+            // $message_queue = $message
 
             debug_print('RPC Request: ' . $message->payload);
             $rpc_request = json_decode($message->payload);
