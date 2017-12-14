@@ -40,7 +40,10 @@ if (!function_exists("debug_print")) {
  */
 class Server {
 
+    private $pubsub;
     private $redis_args;
+    private $redis_server;
+    private $redis_pubsub_server;
     private $message_queue;
     private $local_object;
 
@@ -52,26 +55,35 @@ class Server {
      * @param mixed $local_object Handle to local wrapped object that will receive the RPC calls.
      */
     public function __construct($redis_args, $message_queue, $local_object) {
+        $this->pubsub = null;
         $this->redis_args = $redis_args;
+        $this->redis_pubsub_server = null;
         $this->message_queue = $message_queue;
         $this->local_object = $local_object;
+    }
+
+    public function __destruct(){
+        unset($this->pubsub);
+        if($this->redis_pubsub_server){
+            $this->redis_pubsub_server->disconnect();
+        }
     }
 
     /**
      * Starts the server.
      */
     public function run() {
-        $redis_pubsub_server = new Predis\Client($this->redis_args);
-        $subscribers = $redis_pubsub_server->pubsub('numsub', $this->message_queue);
+        $this->redis_pubsub_server = new Predis\Client($this->redis_args);
+        $subscribers = $this->redis_pubsub_server->pubsub('numsub', $this->message_queue);
         if($subscribers[$this->message_queue] != 0){
             throw new \RuntimeException('Server already running for queue ' .
                 $this->message_queue);
         }
 
-        $pubsub = $redis_pubsub_server->pubSubLoop();
+        $this->pubsub = $this->redis_pubsub_server->pubSubLoop();
 
-        $pubsub->subscribe($this->message_queue);
-        foreach($pubsub as $message){
+        $this->pubsub->subscribe($this->message_queue);
+        foreach($this->pubsub as $message){
             # Pop a message from the queue.
             # Decode the message.
             # Check that the function exists.
@@ -115,7 +127,8 @@ class Server {
                     if(method_exists($e, 'getResponse')){
                         $rpc_response['response'] = $e->getResponse();
                         $rpc_response['response_type'] =
-                            get_class($e->getResponse());
+                            gettype($e->getResponse())
+                            ? get_class($e->getResponse()) : null;
                     }
                 }
             }
@@ -126,9 +139,9 @@ class Server {
             assert($redis_server->pubsub('numsub', $this->response_queue) > 0);
             $redis_server = new Predis\Client($this->redis_args);
             $redis_server->publish($response_queue, $message);
+            unset($redis_server);
         }
     }
-
 }
 
 ?>

@@ -71,11 +71,24 @@ function random_string($size, $valid_chars='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij
 class Client {
 
     private $redis_args;
+    private $redis_server;
+    private $redis_pubsub_server;
     private $message_queue;
 
     public function __construct($redis_args, $message_queue) {
+        $this->redis_server = null;
+        $this->redis_pubsub_server = null;
         $this->redis_args = $redis_args;
         $this->message_queue = $message_queue;
+    }
+
+    public function __destruct(){
+        if($this->redis_server){
+            $this->redis_server->disconnect();
+        }
+        if($this->redis_pubsub_server){
+            $this->redis_pubsub_server->disconnect();
+        }
     }
 
     public function __call($name, $arguments) {
@@ -94,18 +107,19 @@ class Client {
         $request = json_encode($rpc_request);
         debug_print("RPC Request: $request");
 
-        $redis_server = new Predis\Client($this->redis_args);
-        $redis_pubsub_server = new Predis\Client($this->redis_args);
-        $pubsub = $redis_pubsub_server->pubSubLoop();
+        $this->redis_server = new Predis\Client($this->redis_args);
+        $this->redis_pubsub_server = new Predis\Client($this->redis_args);
+        $pubsub = $this->redis_pubsub_server->pubSubLoop();
 
-        $subscribers = $redis_server->pubsub('numsub', $this->message_queue);
+        $subscribers = $this->redis_server->pubsub('numsub', $this->message_queue);
         if($subscribers[$this->message_queue] == 0){
             throw new \RuntimeException('No servers available for queue ' .
                 $this->message_queue);
         }
 
         $pubsub->subscribe($response_queue);
-        $redis_server->publish($this->message_queue, $request);
+        $this->redis_server->publish($this->message_queue, $request);
+        $this->redis_server->disconnect();
 
         $response = null;
         foreach($pubsub as $message){
@@ -113,6 +127,8 @@ class Client {
                 assert($message->channel == $response_queue);
                 $response = $message;
                 $pubsub->unsubscribe($response_queue);
+                unset($pubsub);
+                $this->redis_pubsub_server->disconnect();
             }
             debug_print('Ignoring ' . $message->kind . ': ' . $message->payload);
         }

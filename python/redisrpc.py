@@ -35,12 +35,12 @@ if sys.version_info < (3,):
 
 
 def random_string(size=8, chars=string.ascii_uppercase + string.digits):
-    """Ref: http://stackoverflow.com/questions/2257441"""
+    '''Ref: http://stackoverflow.com/questions/2257441'''
     return ''.join(random.choice(chars) for x in range(size))
 
 
 class curry:
-    """Ref: https://jonathanharrington.wordpress.com/2007/11/01/currying-and-python-a-practical-example/"""
+    '''Ref: https://jonathanharrington.wordpress.com/2007/11/01/currying-and-python-a-practical-example/'''
 
     def __init__(self, fun, *args, **kwargs):
         self.fun = fun
@@ -57,26 +57,26 @@ class curry:
 
 
 class FunctionCall(dict):
-    """Encapsulates a function call as a Python dictionary."""
+    '''Encapsulates a function call as a Python dictionary.'''
 
     @staticmethod
     def from_dict(dictionary):
-        """Return a new FunctionCall from a Python dictionary."""
+        '''Return a new FunctionCall from a Python dictionary.'''
         name = dictionary.get('name')
         args = dictionary.get('args')
         kwargs = dictionary.get('kwargs')
         return FunctionCall(name, args, kwargs)
 
     def __init__(self, name, args=None, kwargs=None):
-        """Create a new FunctionCall from a method name, an optional argument
-        tuple, and an optional keyword argument dictionary."""
+        '''Create a new FunctionCall from a method name, an optional argument
+        tuple, and an optional keyword argument dictionary.'''
         self['name'] = name
         self['args'] = args or []
         self['kwargs'] = kwargs or {}
 
     def as_python_code(self):
-        """Return a string representation of this object that can be evaled to
-        execute the function call."""
+        '''Return a string representation of this object that can be evaled to
+        execute the function call.'''
         argstring = '' if 'args' not in self else \
             ','.join(str(arg) for arg in self['args'])
         kwargstring = '' if 'kwargs' not in self else ','.join(
@@ -94,7 +94,7 @@ class FunctionCall(dict):
 
 
 def decode_message(message):
-    """Returns a (transport, decoded_message) pair."""
+    '''Returns a (transport, decoded_message) pair.'''
     # Try JSON, then try Python pickle, then fail.
     try:
         return JSONTransport.create(), json.loads(message.decode())
@@ -104,7 +104,7 @@ def decode_message(message):
 
 
 class JSONTransport(object):
-    """Cross platform transport."""
+    '''Cross platform transport.'''
     _singleton = None
 
     @classmethod
@@ -121,7 +121,7 @@ class JSONTransport(object):
 
 
 class PickleTransport(object):
-    """Only works with Python clients and servers."""
+    '''Only works with Python clients and servers.'''
     _singleton = None
 
     @classmethod
@@ -139,7 +139,7 @@ class PickleTransport(object):
 
 
 class Client(object):
-    """Calls remote functions using Redis as a message queue."""
+    '''Calls remote functions using Redis as a message queue.'''
 
     def __init__(
             self,
@@ -187,10 +187,8 @@ class Client(object):
         logging.debug('RPC Response: %s' % response['data'])
         rpc_response = self.transport.loads(response['data'])
         if 'response' in rpc_response:
-            Response = type(str(rpc_response['response_type']), (object,), {})
-            response = Response()
-            if rpc_response['response'] is not None:
-                response.__dict__ = rpc_response['response']
+            Class_ = Response.from_name(rpc_response.get('response_type'))
+            return Class_(rpc_response['response'] or {})
         else:
             response = None
 
@@ -209,12 +207,12 @@ class Client(object):
         return rpc_response['return_value']
 
     def __getattr__(self, name):
-        """Treat missing attributes as remote method call invocations."""
+        '''Treat missing attributes as remote method call invocations.'''
         return curry(self.call, name)
 
 
 class Server(object):
-    """Executes function calls received from a Redis queue."""
+    '''Executes function calls received from a Redis queue.'''
 
     def __init__(self, redis_args, message_queue, local_object):
         self.redis_args = redis_args
@@ -234,9 +232,9 @@ class Server(object):
             response_queue = rpc_request['response_queue']
             function_call = FunctionCall.from_dict(
                 rpc_request['function_call'])
-            code = 'self.return_value = self.local_object.' + function_call.as_python_code()
             try:
-                exec(code)
+                exec('self.return_value = self.local_object.%s' %
+                     function_call.as_python_code())
                 rpc_response = dict(return_value=self.return_value)
             except BaseException:
                 (type, value, traceback) = sys.exc_info()
@@ -246,10 +244,12 @@ class Server(object):
             self.redis_server.rpush(response_queue, message)
 
 
-class RemoteException(Exception):
-    """Raised by an RPC client when an exception occurs on the RPC server."""
+class FromNameMixin(object):
 
-    exceptions = dict()
+    classes = dict()
+
+    def __init__(self, **kwargs):
+        self.__dict__.update(kwargs)
 
     @classmethod
     def from_name(cls, key, *keys):
@@ -259,18 +259,27 @@ class RemoteException(Exception):
         keys = key[1:] + keys
         key = key[0]
 
-        if key not in cls.exceptions:
-            cls.exceptions[key] = type(key, (cls,), dict(parent=cls))
+        if key not in cls.classes:
+            cls.classes[key] = type(key, (cls,), dict(parent=cls))
 
-        Exception = cls.exceptions[key]
+        Class_ = cls.classes[key]
         if keys:
-            return Exception.from_name(*keys)
+            return Class_.from_name(*keys)
         else:
-            return Exception
+            return Class_
+
+
+class Response(FromNameMixin):
+    '''Returned by the RPC client, through `Response.classes[name]` the return
+    type can be overridden'''
+
+
+class RemoteException(Exception, FromNameMixin):
+    '''Raised by an RPC client when an exception occurs on the RPC server.'''
 
 
 class TimeoutException(Exception):
-    """Raised by an RPC client when a timeout occurs."""
+    '''Raised by an RPC client when a timeout occurs.'''
     pass
 
 
