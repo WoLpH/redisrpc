@@ -248,8 +248,9 @@ class FromNameMixin(object):
 
     classes = dict()
 
-    def __init__(self, **kwargs):
-        self.__dict__.update(kwargs)
+    def __init__(self, data):
+        if data:
+            self.__dict__.update(data)
 
     @classmethod
     def from_name(cls, key, *keys):
