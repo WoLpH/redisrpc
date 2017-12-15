@@ -43,8 +43,7 @@ class Server {
     private $pubsub;
     private $redis_args;
     private $redis_pubsub_server;
-    private $message_queue;
-    private $local_object;
+    private $local_objects;
 
     /**
      * Initializes a new server.
@@ -53,12 +52,11 @@ class Server {
      * @param mixed $local_object Handle to local wrapped objects as
      *        associative array (key = queue name) that will receive the RPC calls.
      */
-    public function __construct($redis_args, $message_queue, $local_object) {
+    public function __construct($redis_args, $local_objects) {
         $this->pubsub = null;
         $this->redis_args = $redis_args;
         $this->redis_pubsub_server = null;
-        $this->message_queue = $message_queue;
-        $this->local_object = $local_object;
+        $this->local_objects = $local_objects;
     }
 
     public function __destruct(){
@@ -73,19 +71,26 @@ class Server {
      */
     public function run() {
         $this->redis_pubsub_server = new Predis\Client($this->redis_args);
-        $subscribers = $this->redis_pubsub_server->pubsub('numsub', $this->message_queue);
-        if($subscribers[$this->message_queue] != 0){
-            throw new \RuntimeException('Server already running for queue ' .
-                $this->message_queue);
-        }
-
         $this->pubsub = $this->redis_pubsub_server->pubSubLoop();
 
+        $started = 0;
+        $redis_server = new Predis\Client($this->redis_args);
         foreach($this->local_objects as $key => $local_object){
-            $pubsub->subscribe($key);
+            $subscribers = $redis_server->pubsub('numsub', $key);
+            if($subscribers[$key] != 0){
+                echo 'Server already running for ' . $key . PHP_EOL;
+            }else{
+                $this->pubsub->subscribe($key);
+                $started++;
+            }
+        }
+        unset($redis_server);
+        if($started == 0){
+            throw new \RuntimeException('Server already running for queues' .
+                implode(', ', array_keys($this->local_objects)));
         }
 
-        foreach($pubsub as $message){
+        foreach($this->pubsub as $message){
             # Pop a message from the queue.
             # Decode the message.
             # Check that the function exists.
@@ -96,12 +101,13 @@ class Server {
 
             // assert($message->channel == $this->message_queue);
             // $message_queue = $message
+            $local_object = $this->local_objects[$message->channel];
 
             debug_print('RPC Request: ' . $message->payload);
             $rpc_request = json_decode($message->payload);
             $response_queue = $rpc_request->response_queue;
             $function_call = FunctionCall::from_object($rpc_request->function_call);
-            if (!method_exists($this->local_object, $function_call->name)) {
+            if (!method_exists($local_object, $function_call->name)) {
                 $rpc_response = array(
                     'exception' => 'method "' . $function_call->name . 
                     '" does not exist');
@@ -112,7 +118,7 @@ class Server {
 
                 try {
                     $return_value = call_user_func_array(
-                        array($this->local_object, $function_call->name),
+                        array($local_object, $function_call->name),
                         $function_call->args);
 
                     $rpc_response = array(
@@ -139,7 +145,6 @@ class Server {
             $message = json_encode($rpc_response);
 
             debug_print("RPC Response: $message");
-            assert($redis_server->pubsub('numsub', $this->response_queue) > 0);
             $redis_server = new Predis\Client($this->redis_args);
             $redis_server->publish($response_queue, $message);
             unset($redis_server);
