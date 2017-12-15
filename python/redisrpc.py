@@ -150,12 +150,25 @@ class Client(object):
         self.message_queue = message_queue
         self.redis_args = redis_args or dict()
         self.timeout = timeout
+
+        self.pubsub = None
+        self.redis_server = None
+        self.redis_pubsub_server = None
+
         if transport == 'json':
             self.transport = JSONTransport()
         elif transport == 'pickle':
             self.transport = PickleTransport()
         else:
             raise Exception('invalid transport {0}'.format(transport))
+
+    def __del__(self):
+        if self.pubsub:
+            self.pubsub.close()
+
+        self.pubsub = None
+        self.redis_server = None
+        self.redis_pubsub_server = None
 
     def call(self, method_name, *args, **kwargs):
         function_call = FunctionCall(method_name, args, kwargs)
@@ -166,15 +179,17 @@ class Client(object):
         )
         message = self.transport.dumps(rpc_request)
         logging.debug('RPC Request: %s' % message)
-        redis_server = redis.StrictRedis(**self.redis_args)
+        self.redis_server = redis_server = redis.StrictRedis(**self.redis_args)
 
         subscribers = dict(redis_server.pubsub_numsub(self.message_queue))
         if int(subscribers[self.message_queue]) == 0:
             raise NoServerAvailableException(
                 'No servers available for queue %s' % self.message_queue)
 
-        redis_pubsub_server = redis.StrictRedis(**self.redis_args)
-        pubsub = redis_pubsub_server.pubsub()
+        self.redis_pubsub_server = redis_pubsub_server = redis.StrictRedis(
+            **self.redis_args)
+        self.pubsub = pubsub = redis_pubsub_server.pubsub(
+            ignore_subscribe_messages=True)
         pubsub.subscribe(response_queue)
         redis_server.publish(self.message_queue, message)
 
@@ -183,6 +198,7 @@ class Client(object):
                 assert message['channel'] == response_queue
                 response = message
                 pubsub.unsubscribe(response_queue)
+                pubsub.close()
 
         logging.debug('RPC Response: %s' % response['data'])
         rpc_response = self.transport.loads(response['data'])
