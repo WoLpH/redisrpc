@@ -42,14 +42,9 @@ class Server {
 
     private $pubsub;
     private $redis_args;
-<<<<<<< HEAD
-    private $redis_server;
     private $redis_pubsub_server;
     private $message_queue;
     private $local_object;
-=======
-    private $local_objects;
->>>>>>> 5dbe1c85f67f4cff949a2ef4a5b5f46f66c4a85a
 
     /**
      * Initializes a new server.
@@ -58,18 +53,12 @@ class Server {
      * @param mixed $local_object Handle to local wrapped objects as
      *        associative array (key = queue name) that will receive the RPC calls.
      */
-<<<<<<< HEAD
     public function __construct($redis_args, $message_queue, $local_object) {
         $this->pubsub = null;
         $this->redis_args = $redis_args;
         $this->redis_pubsub_server = null;
         $this->message_queue = $message_queue;
         $this->local_object = $local_object;
-=======
-    public function __construct($redis_args, $local_objects) {
-        $this->redis_args = $redis_args;
-        $this->local_objects = $local_objects;
->>>>>>> 5dbe1c85f67f4cff949a2ef4a5b5f46f66c4a85a
     }
 
     public function __destruct(){
