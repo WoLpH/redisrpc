@@ -268,6 +268,12 @@ class FromNameMixin(object):
         if data:
             self.__dict__.update(data)
 
+    def get(self, key, default=None):
+        return getattr(self, str(key), default)
+
+    def __getitem__(self, key):
+        return self.get(key)
+
     @classmethod
     def from_name(cls, key, *keys):
         key = tuple(str(key).replace('\\', '.').split('.'))

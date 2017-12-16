@@ -136,7 +136,7 @@ class Server {
                     if(method_exists($e, 'getResponse')){
                         $rpc_response['response'] = $e->getResponse();
                         $rpc_response['response_type'] =
-                            gettype($e->getResponse())
+                            gettype($e->getResponse()) == 'object'
                             ? get_class($e->getResponse()) : null;
                     }
                 }
