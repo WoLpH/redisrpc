@@ -138,7 +138,39 @@ class PickleTransport(object):
         return pickle.loads(obj)
 
 
-class Client(object):
+class RedisBase(object):
+
+    def __init__(self, redis_args=None):
+        self.redis_args = redis_args or dict()
+
+        self.pubsub = None
+        self.redis_server = None
+        self.redis_pubsub_server = None
+
+    def __del__(self):
+        if self.pubsub:
+            self.pubsub.close()
+
+        self.pubsub = None
+        self.redis_server = None
+        self.redis_pubsub_server = None
+
+    def get_pubsub(self):
+        if not self.pubsub:
+            self.redis_pubsub_server = redis.StrictRedis(**self.redis_args)
+            self.pubsub = self.redis_pubsub_server.pubsub(
+                ignore_subscribe_messages=True)
+
+        return self.pubsub
+
+    def get_redis_server(self):
+        if not self.redis_server:
+            self.redis_server = redis.StrictRedis(**self.redis_args)
+
+        return self.redis_server
+
+
+class Client(RedisBase):
     '''Calls remote functions using Redis as a message queue.'''
 
     def __init__(
@@ -148,12 +180,7 @@ class Client(object):
             timeout=0,
             transport='json'):
         self.message_queue = message_queue
-        self.redis_args = redis_args or dict()
         self.timeout = timeout
-
-        self.pubsub = None
-        self.redis_server = None
-        self.redis_pubsub_server = None
 
         if transport == 'json':
             self.transport = JSONTransport()
@@ -162,13 +189,7 @@ class Client(object):
         else:
             raise Exception('invalid transport {0}'.format(transport))
 
-    def __del__(self):
-        if self.pubsub:
-            self.pubsub.close()
-
-        self.pubsub = None
-        self.redis_server = None
-        self.redis_pubsub_server = None
+        RedisBase.__init__(self, redis_args)
 
     def call(self, method_name, *args, **kwargs):
         function_call = FunctionCall(method_name, args, kwargs)
@@ -179,17 +200,14 @@ class Client(object):
         )
         message = self.transport.dumps(rpc_request)
         logging.debug('RPC Request: %s' % message)
-        self.redis_server = redis_server = redis.StrictRedis(**self.redis_args)
+        redis_server = self.get_redis_server()
 
         subscribers = dict(redis_server.pubsub_numsub(self.message_queue))
         if int(subscribers[self.message_queue]) == 0:
             raise NoServerAvailableException(
                 'No servers available for queue %s' % self.message_queue)
 
-        self.redis_pubsub_server = redis_pubsub_server = redis.StrictRedis(
-            **self.redis_args)
-        self.pubsub = pubsub = redis_pubsub_server.pubsub(
-            ignore_subscribe_messages=True)
+        pubsub = self.get_pubsub()
         pubsub.subscribe(response_queue)
         redis_server.publish(self.message_queue, message)
 
@@ -227,37 +245,49 @@ class Client(object):
         return curry(self.call, name)
 
 
-class Server(object):
+class Server(RedisBase):
     '''Executes function calls received from a Redis queue.'''
 
-    def __init__(self, redis_args, message_queue, local_object):
-        self.redis_args = redis_args
-        self.message_queue = message_queue
-        self.local_object = local_object
+    def __init__(self, local_objects, redis_args=None):
+        self.local_objects = local_objects
+
+        RedisBase.__init__(self, redis_args)
 
     def run(self):
         # Flush the message queue.
-        self.redis_server.delete(self.message_queue)
-        while True:
-            message_queue, message = self.redis_server.blpop(
-                self.message_queue)
-            message_queue = message_queue.decode()
-            assert message_queue == self.message_queue
-            logging.debug('RPC Request: %s' % message)
-            transport, rpc_request = decode_message(message)
+        pubsub = self.get_pubsub()
+        pubsub.subscribe(self.local_objects)
+
+        for message in pubsub.listen():
+            if message['type'] != 'message':
+                continue
+
+            logging.debug('RPC Request: %s' % message['data'])
+            transport, rpc_request = decode_message(message['data'])
             response_queue = rpc_request['response_queue']
+
             function_call = FunctionCall.from_dict(
                 rpc_request['function_call'])
             try:
-                exec('self.return_value = self.local_object.%s' %
-                     function_call.as_python_code())
-                rpc_response = dict(return_value=self.return_value)
-            except BaseException:
-                (type, value, traceback) = sys.exc_info()
-                rpc_response = dict(exception=repr(value))
+                local_object = self.local_objects[message['channel']]
+                method = getattr(local_object, function_call['name'])
+                response = method(
+                    *function_call['args'],
+                    **function_call['kwargs'])
+
+                rpc_response = dict(
+                    return_type=type(response),
+                    return_value=response,
+                )
+            except Exception as e:
+                rpc_response = dict(
+                    exception=str(e),
+                    exception_type=type(e),
+                )
             message = transport.dumps(rpc_response)
             logging.debug('RPC Response: %s' % message)
-            self.redis_server.rpush(response_queue, message)
+
+            self.get_redis_server().publish(response_queue, message)
 
 
 class FromNameMixin(object):
