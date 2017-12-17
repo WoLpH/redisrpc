@@ -210,7 +210,7 @@ class Client(object):
 
         if 'exception' in rpc_response:
             Exception = RemoteException.from_name(
-                rpc_response['exception_type'])
+                rpc_response.get('exception_type'))
             exception = Exception(rpc_response['exception'])
             exception.response = response
 
@@ -273,6 +273,9 @@ class FromNameMixin(object):
 
     def __getitem__(self, key):
         return self.get(key)
+
+    def __repr__(self):
+        return json.dumps(self.__dict__)
 
     @classmethod
     def from_name(cls, key, *keys):
