@@ -123,7 +123,7 @@ class Server {
                         $function_call->args);
 
                     $rpc_response = array(
-                        'response_value' => $response_value,
+                        'response' => $response_value,
                         'response_type' => gettype($response_value) == 'object'
                         ? get_class($response_value) : gettype($response_value),
                     );
