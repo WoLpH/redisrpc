@@ -30,6 +30,10 @@ __all__ = [
     'TimeoutException'
 ]
 
+
+logger = logging.getLogger('redisrpc')
+
+
 if sys.version_info < (3,):
     range = xrange
 
@@ -199,7 +203,7 @@ class Client(RedisBase):
             response_queue=response_queue,
         )
         message = self.transport.dumps(rpc_request)
-        logging.debug('RPC Request: %s' % message)
+        logger.debug('RPC Request: %s' % message)
         redis_server = self.get_redis_server()
 
         subscribers = dict(redis_server.pubsub_numsub(self.message_queue))
@@ -218,12 +222,17 @@ class Client(RedisBase):
                 pubsub.unsubscribe(response_queue)
                 pubsub.close()
 
-        logging.debug('RPC Response: %s' % response['data'])
+        logger.debug('RPC Response: %s' % response['data'])
         rpc_response = self.transport.loads(response['data'])
         if 'response' in rpc_response:
-            Class_ = Response.from_name(rpc_response.get('response_type'))
+            if rpc_response.get('response_type'):
+                Class_ = Response.from_name(rpc_response.get('response_type'))
+            else:
+                Class_ = Response
+
             response = Class_(rpc_response['response'])
         else:
+            logger.warn('No response in: %r' % rpc_response)
             response = None
 
         if 'exception' in rpc_response:
@@ -235,7 +244,7 @@ class Client(RedisBase):
 
             exception = Exception(rpc_response['exception'])
             exception.response = response
-            logging.exception(rpc_response)
+            logger.exception(rpc_response)
 
             raise exception
         else:
@@ -263,7 +272,7 @@ class Server(RedisBase):
             if message['type'] != 'message':
                 continue
 
-            logging.debug('RPC Request: %s' % message['data'])
+            logger.debug('RPC Request: %s' % message['data'])
             transport, rpc_request = decode_message(message['data'])
             response_queue = rpc_request['response_queue']
 
@@ -286,24 +295,30 @@ class Server(RedisBase):
                     exception_type=type(e),
                 )
             message = transport.dumps(rpc_response)
-            logging.debug('RPC Response: %s' % message)
+            logger.debug('RPC Response: %s' % message)
 
             self.get_redis_server().publish(response_queue, message)
 
 
+default_classes = dict(
+    boolean=bool,
+    NULL=lambda data: None,
+    string=lambda s: s,
+)
+
+
 class FromNameMixin(object):
+    # Needs to be initialized in the inheriting classes. Otherwise the classes
+    # are shared (and mixing exceptions and other types is a bad idea)
+    classes = None
 
-    classes = dict(
-        boolean=bool,
-        NULL=lambda data: None,
-    )
-
-    def __init__(self, data):
+    def __init__(self, data=None):
         if data:
             if isinstance(data, dict):
                 self.__dict__.update(data)
             else:
-                logging.error('Unexpected data for %s: %r', type(data), data)
+                logger.error(
+                    'Unexpected data for %s: %r', self.__class__, data)
 
     def get(self, key, default=None):
         return getattr(self, str(key), default)
@@ -335,10 +350,17 @@ class FromNameMixin(object):
 class Response(FromNameMixin):
     '''Returned by the RPC client, through `Response.classes[name]` the return
     type can be overridden'''
+    classes = default_classes.copy()
 
 
-class RemoteException(BaseException, FromNameMixin):
+class RemoteException(FromNameMixin, BaseException):
     '''Raised by an RPC client when an exception occurs on the RPC server.'''
+    classes = default_classes.copy()
+
+    def __init__(self, message=None):
+        if message:
+            BaseException.__init__(self, message)
+        FromNameMixin.__init__(self)
 
 
 class TimeoutException(BaseException):
