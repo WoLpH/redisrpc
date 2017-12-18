@@ -95,7 +95,8 @@ class Server {
             # Decode the message.
             # Check that the function exists.
             if($message->kind != 'message'){
-                debug_print('Ignoring ' . $message->kind . ': ' . $message->payload);
+                # debug_print('Ignoring ' . $message->kind . ': ' .
+                #     $message->payload);
                 continue;
             }
 
@@ -103,41 +104,41 @@ class Server {
             // $message_queue = $message
             $local_object = $this->local_objects[$message->channel];
 
-            debug_print('RPC Request: ' . $message->payload);
             $rpc_request = json_decode($message->payload);
             $response_queue = $rpc_request->response_queue;
-            $function_call = FunctionCall::from_object($rpc_request->function_call);
+            $function_call = FunctionCall::from_object(
+                $rpc_request->function_call);
+            $code = $function_call->name;
+            $code .= '(' . json_encode($function_call->args) . ')';
+            debug_print('RPC Request: ' . $code);
+
             if (!method_exists($local_object, $function_call->name)) {
                 $rpc_response = array(
                     'exception' => 'method "' . $function_call->name . 
                     '" does not exist');
             }else{
-                $code = $function_call->name;
-                $code .= json_encode($function_call->args);
-                debug_print($code);
-
                 try {
-                    $return_value = call_user_func_array(
+                    $response_value = call_user_func_array(
                         array($local_object, $function_call->name),
                         $function_call->args);
 
                     $rpc_response = array(
-                        'return_value' => $return_value,
-                        'return_type' => gettype($return_value) == 'object'
-                        ? get_class($return_value) : null,
+                        'response_value' => $response_value,
+                        'response_type' => gettype($response_value) == 'object'
+                        ? get_class($response_value) : gettype($response_value),
                     );
-                    print_r($rpc_response);
                 }catch (\Exception $e) {
                     $rpc_response = array(
                         'exception' => $e->getMessage(),
                         'exception_type' => gettype($e) == 'object'
-                        ? get_class($e) : null,
+                        ? get_class($e) : gettype($e),
                     );
                     if(method_exists($e, 'getResponse')){
                         $rpc_response['response'] = $e->getResponse();
                         $rpc_response['response_type'] =
                             gettype($e->getResponse()) == 'object'
-                            ? get_class($e->getResponse()) : null;
+                            ? get_class($e->getResponse())
+                            : gettype($e->getResponse());
                     }
                 }
             }
