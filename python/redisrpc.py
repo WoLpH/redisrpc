@@ -222,23 +222,24 @@ class Client(RedisBase):
         rpc_response = self.transport.loads(response['data'])
         if 'response' in rpc_response:
             Class_ = Response.from_name(rpc_response.get('response_type'))
-            return Class_(rpc_response['response'] or {})
+            response = Class_(rpc_response['response'])
         else:
             response = None
 
         if 'exception' in rpc_response:
-            Exception = RemoteException.from_name(
-                rpc_response.get('exception_type'))
+            if rpc_response.get('exception_type'):
+                Exception = RemoteException.from_name(
+                    rpc_response['exception_type'])
+            else:
+                Exception = RemoteException
+
             exception = Exception(rpc_response['exception'])
             exception.response = response
+            logging.exception(rpc_response)
 
             raise exception
-
-        if 'return_value' not in rpc_response:
-            raise RemoteException(
-                'Malformed RPC Response message: %s' %
-                rpc_response)
-        return rpc_response['return_value']
+        else:
+            return response
 
     def __getattr__(self, name):
         '''Treat missing attributes as remote method call invocations.'''
@@ -292,11 +293,17 @@ class Server(RedisBase):
 
 class FromNameMixin(object):
 
-    classes = dict()
+    classes = dict(
+        boolean=bool,
+        NULL=lambda data: None,
+    )
 
     def __init__(self, data):
         if data:
-            self.__dict__.update(data)
+            if isinstance(data, dict):
+                self.__dict__.update(data)
+            else:
+                logging.error('Unexpected data for %s: %r', type(data), data)
 
     def get(self, key, default=None):
         return getattr(self, str(key), default)
@@ -330,14 +337,14 @@ class Response(FromNameMixin):
     type can be overridden'''
 
 
-class RemoteException(Exception, FromNameMixin):
+class RemoteException(BaseException, FromNameMixin):
     '''Raised by an RPC client when an exception occurs on the RPC server.'''
 
 
-class TimeoutException(Exception):
+class TimeoutException(BaseException):
     '''Raised by an RPC client when a timeout occurs.'''
     pass
 
 
-class NoServerAvailableException(Exception):
+class NoServerAvailableException(BaseException):
     pass
