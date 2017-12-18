@@ -286,13 +286,13 @@ class Server(RedisBase):
                     **function_call['kwargs'])
 
                 rpc_response = dict(
-                    return_type=type(response),
+                    return_type=str(type(response)),
                     return_value=response,
                 )
             except Exception as e:
                 rpc_response = dict(
                     exception=str(e),
-                    exception_type=type(e),
+                    exception_type=str(type(e)),
                 )
             message = transport.dumps(rpc_response)
             logger.debug('RPC Response: %s' % message)
