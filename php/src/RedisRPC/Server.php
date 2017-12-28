@@ -137,8 +137,8 @@ class Server {
                         $function_call->args);
 
                     $rpc_response = array(
-                        'response' => $response_value,
-                        'response_type' => gettype($response_value) == 'object'
+                        'return_value' => $response_value,
+                        'return_type' => gettype($response_value) == 'object'
                         ? get_class($response_value) : gettype($response_value),
                     );
                 }catch (\Exception $e) {
@@ -149,7 +149,7 @@ class Server {
                     );
                     if(method_exists($e, 'getResponse')){
                         $rpc_response['response'] = $e->getResponse();
-                        $rpc_response['response_type'] =
+                        $rpc_response['return_type'] =
                             gettype($e->getResponse()) == 'object'
                             ? get_class($e->getResponse())
                             : gettype($e->getResponse());
