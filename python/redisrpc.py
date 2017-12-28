@@ -230,10 +230,10 @@ class Client(RedisBase):
             else:
                 Class_ = Response
 
-            return_value = Class_(rpc_response['return_value'])
+            response = Class_(rpc_response['return_value'])
         else:
             logger.warn('No return value in: %r' % rpc_response)
-            return_value = None
+            response = None
 
         if 'exception' in rpc_response:
             if rpc_response.get('exception_type'):
@@ -243,7 +243,7 @@ class Client(RedisBase):
                 Exception = RemoteException
 
             exception = Exception(rpc_response['exception'])
-            exception.response = return_value
+            exception.response = response
             logger.exception(rpc_response)
 
             raise exception
@@ -300,13 +300,14 @@ class Server(RedisBase):
             self.get_redis_server().publish(response_queue, message)
 
 
-default_classes = dict(
-    array=list,
-    tuple=tuple,
-    boolean=bool,
-    NULL=lambda data: None,
-    string=lambda s: s,
-)
+default_classes = {
+    'array': list,
+    'tuple': tuple,
+    "<type 'tuple'>": tuple,
+    'boolean': bool,
+    'NULL': lambda data: None,
+    'string': lambda s: s,
+}
 
 
 class FromNameMixin(object):
