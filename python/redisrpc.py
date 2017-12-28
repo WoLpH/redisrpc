@@ -301,8 +301,12 @@ class Server(RedisBase):
             self.get_redis_server().publish(response_queue, message)
 
 
+def native(value):
+    return value
+
+
 default_classes = {
-    'array': list,
+    'array': native,
     'boolean': bool,
     'NULL': lambda data: None,
     'string': lambda s: s,
