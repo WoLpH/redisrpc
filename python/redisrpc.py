@@ -302,11 +302,11 @@ class Server(RedisBase):
 
 default_classes = {
     'array': list,
-    'tuple': tuple,
-    "<type 'tuple'>": tuple,
     'boolean': bool,
     'NULL': lambda data: None,
     'string': lambda s: s,
+    'tuple': tuple,
+    'dict': dict,
 }
 
 
