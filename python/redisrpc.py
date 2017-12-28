@@ -230,7 +230,7 @@ class Client(RedisBase):
             else:
                 Class_ = Response
 
-            return_value = Class_(rpc_response['response'])
+            return_value = Class_(rpc_response['return_value'])
         else:
             logger.warn('No return value in: %r' % rpc_response)
             return_value = None
