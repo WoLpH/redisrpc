@@ -301,6 +301,7 @@ class Server(RedisBase):
 
 
 default_classes = dict(
+    array=list,
     boolean=bool,
     NULL=lambda data: None,
     string=lambda s: s,
