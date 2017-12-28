@@ -224,16 +224,16 @@ class Client(RedisBase):
 
         logger.debug('RPC Response: %s' % response['data'])
         rpc_response = self.transport.loads(response['data'])
-        if 'response' in rpc_response:
-            if rpc_response.get('response_type'):
-                Class_ = Response.from_name(rpc_response.get('response_type'))
+        if 'return_value' in rpc_response:
+            if rpc_response.get('return_type'):
+                Class_ = Response.from_name(rpc_response.get('return_type'))
             else:
                 Class_ = Response
 
-            response = Class_(rpc_response['response'])
+            return_value = Class_(rpc_response['response'])
         else:
-            logger.warn('No response in: %r' % rpc_response)
-            response = None
+            logger.warn('No return value in: %r' % rpc_response)
+            return_value = None
 
         if 'exception' in rpc_response:
             if rpc_response.get('exception_type'):
@@ -243,7 +243,7 @@ class Client(RedisBase):
                 Exception = RemoteException
 
             exception = Exception(rpc_response['exception'])
-            exception.response = response
+            exception.response = return_value
             logger.exception(rpc_response)
 
             raise exception
