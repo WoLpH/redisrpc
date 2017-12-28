@@ -21,6 +21,7 @@ import random
 import string
 import sys
 import redis
+import collections
 
 
 __all__ = [
@@ -307,6 +308,7 @@ default_classes = {
     'string': lambda s: s,
     'tuple': tuple,
     'dict': dict,
+    'OrderedDict': collections.OrderedDict,
 }
 
 
