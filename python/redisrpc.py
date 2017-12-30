@@ -22,6 +22,7 @@ import string
 import sys
 import redis
 import collections
+from datetime import datetime
 
 
 __all__ = [
@@ -214,6 +215,7 @@ class Client(RedisBase):
 
         pubsub = self.get_pubsub()
         pubsub.subscribe(response_queue)
+        start = datetime.now()
         redis_server.publish(self.message_queue, message)
 
         for message in pubsub.listen():
@@ -223,8 +225,18 @@ class Client(RedisBase):
                 pubsub.unsubscribe(response_queue)
                 pubsub.close()
 
-        logger.debug('RPC Response: %s' % response['data'])
+        logger.debug('RPC Response: %s', response['data'])
+
         rpc_response = self.transport.loads(response['data'])
+
+        response_repr = rpc_response.copy()
+        response_repr['duration'] = datetime.now() - start
+        if 'data' in response_repr:
+            response_repr['data'] = repr(response_repr['data'])
+        if 'exception' in response_repr:
+            response_repr['exception'] = repr(response_repr['exception'])
+        logger.info('', dict(rpc_responses=[response_repr]))
+
         if 'return_value' in rpc_response:
             if rpc_response.get('return_type'):
                 Class_ = Response.from_name(rpc_response.get('return_type'))
