@@ -230,7 +230,7 @@ class Client(RedisBase):
         rpc_response = self.transport.loads(response['data'])
 
         response_repr = rpc_response.copy()
-        response_repr['duration'] = datetime.now() - start
+        response_repr['duration'] = str(datetime.now() - start)
         if 'data' in response_repr:
             response_repr['data'] = repr(response_repr['data'])
         if 'exception' in response_repr:
