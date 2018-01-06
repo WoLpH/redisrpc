@@ -104,7 +104,7 @@ def decode_message(message):
     # Try JSON, then try Python pickle, then fail.
     try:
         return JSONTransport.create(), json.loads(message.decode())
-    except BaseException:
+    except Exception:
         pass
     return PickleTransport.create(), pickle.loads(message)
 
@@ -374,20 +374,20 @@ class Response(FromNameMixin):
     classes = default_classes.copy()
 
 
-class RemoteException(FromNameMixin, BaseException):
+class RemoteException(FromNameMixin, Exception):
     '''Raised by an RPC client when an exception occurs on the RPC server.'''
     classes = default_classes.copy()
 
     def __init__(self, message=None):
         if message:
-            BaseException.__init__(self, message)
+            Exception.__init__(self, message)
         FromNameMixin.__init__(self)
 
 
-class TimeoutException(BaseException):
+class TimeoutException(Exception):
     '''Raised by an RPC client when a timeout occurs.'''
     pass
 
 
-class NoServerAvailableException(BaseException):
+class NoServerAvailableException(Exception):
     pass
