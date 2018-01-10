@@ -148,6 +148,7 @@ class RedisBase(object):
 
     def __init__(self, redis_args=None):
         self.redis_args = redis_args or dict()
+        logger.debug('RPC Redis args: %s', self.redis_args)
 
         self.pubsub = None
         self.redis_server = None
@@ -183,7 +184,7 @@ class Client(RedisBase):
             self,
             message_queue,
             redis_args=None,
-            timeout=0,
+            timeout=60,
             transport='json'):
         self.message_queue = message_queue
         self.timeout = timeout
@@ -218,12 +219,31 @@ class Client(RedisBase):
         start = datetime.now()
         redis_server.publish(self.message_queue, message)
 
-        for message in pubsub.listen():
-            if message['type'] == 'message':
+        while pubsub.subscribed:
+            if self.timeout:
+                message = pubsub.parse_response(
+                    block=False, timeout=self.timeout)
+            else:
+                message = pubsub.parse_response(block=True)
+
+            if message is None:
+                raise TimeoutException(
+                    'No response within %s seconds while waiting for %r' % (
+                        self.timeout, rpc_request))
+
+            message = pubsub.handle_message(message)
+            if message and message['type'] == 'message':
                 assert message['channel'] == response_queue
                 response = message
                 pubsub.unsubscribe(response_queue)
                 pubsub.close()
+                break
+        else:
+            raise TimeoutException(
+                'No response within %s seconds while waiting for %r' % (
+                    self.timeout, self.rpc_request))
+
+        assert response['channel'] == response_queue
 
         logger.debug('RPC Response: %s', response['data'])
 
