@@ -251,7 +251,7 @@ class Client(RedisBase):
 
         response_repr = dict()
         for k, v in rpc_response.items():
-            if isinstance(v, (dict, list, set)):
+            if isinstance(v, (dict, list, set)) or k in ('return_value',):
                 v = repr(v)
                 if len(v) > 2000:
                     v = v[:2000] + '...'
