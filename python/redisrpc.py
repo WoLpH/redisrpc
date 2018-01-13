@@ -250,7 +250,7 @@ class Client(RedisBase):
         rpc_response = self.transport.loads(response['data'])
 
         response_repr = dict()
-        repr_keys = 'return_value', 'response', 'exception'
+        repr_keys = set(('return_value', 'response', 'exception'))
         for k, v in rpc_response.items():
             if isinstance(v, (dict, list, set)) or k in repr_keys:
                 v = repr(v)
@@ -282,7 +282,7 @@ class Client(RedisBase):
 
             exception = Exception(rpc_response['exception'])
             exception.response = response
-            logger.exception(rpc_response)
+            logger.exception(repr(exception))
 
             raise exception
         else:
