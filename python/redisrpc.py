@@ -251,10 +251,12 @@ class Client(RedisBase):
 
         response_repr = dict()
         for k, v in rpc_response.items():
-            r = repr(v)
-            if len(r) > 2000:
-                r = r[:2000] + '...'
-            response_repr[k] = r
+            if isinstance(v, (dict, list, set)):
+                v = repr(v)
+                if len(v) > 2000:
+                    v = v[:2000] + '...'
+
+            response_repr[k] = v
         response_repr['duration'] = str(datetime.now() - start)
         logger.info('', dict(rpc_responses=[response_repr]))
 
