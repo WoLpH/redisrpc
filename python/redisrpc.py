@@ -249,12 +249,13 @@ class Client(RedisBase):
 
         rpc_response = self.transport.loads(response['data'])
 
-        response_repr = rpc_response.copy()
+        response_repr = dict()
+        for k, v in rpc_response.items():
+            r = repr(v)
+            if len(r) > 2000:
+                r = r[:2000] + '...'
+            response_repr[k] = r
         response_repr['duration'] = str(datetime.now() - start)
-        if 'data' in response_repr:
-            response_repr['data'] = repr(response_repr['data'])
-        if 'exception' in response_repr:
-            response_repr['exception'] = repr(response_repr['exception'])
         logger.info('', dict(rpc_responses=[response_repr]))
 
         if 'return_value' in rpc_response:
