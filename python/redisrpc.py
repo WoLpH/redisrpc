@@ -253,8 +253,10 @@ class Client(RedisBase):
         for k, v in rpc_response.items():
             if isinstance(v, (dict, list, set)) or k in ('return_value',):
                 v = repr(v)
+                k += '_repr'
                 if len(v) > 2000:
                     v = v[:2000] + '...'
+
 
             response_repr[k] = v
         response_repr['duration'] = str(datetime.now() - start)
