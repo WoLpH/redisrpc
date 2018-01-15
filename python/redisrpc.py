@@ -34,7 +34,6 @@ __all__ = [
 ]
 
 
-logger = logging.getLogger('redisrpc')
 
 
 if sys.version_info < (3,):
@@ -148,8 +147,10 @@ class PickleTransport(object):
 class RedisBase(object):
 
     def __init__(self, redis_args=None):
+        self.logger = logging.getLogger('redisrpc.%s' %
+                                        self.__class__.__name__)
         self.redis_args = redis_args or dict()
-        logger.debug('RPC Redis args: %s', self.redis_args)
+        self.logger.debug('RPC Redis args: %s', self.redis_args)
 
         self.pubsub = None
         self.redis_server = None
@@ -207,7 +208,7 @@ class Client(RedisBase):
             response_queue=response_queue,
         )
         message = self.transport.dumps(rpc_request)
-        logger.debug('RPC Request: %s' % message)
+        self.logger.debug('RPC Request: %s' % message)
         redis_server = self.get_redis_server()
 
         subscribers = dict(redis_server.pubsub_numsub(self.message_queue))
@@ -246,7 +247,7 @@ class Client(RedisBase):
 
         assert response['channel'] == response_queue
 
-        logger.debug('RPC Response: %s', response['data'])
+        self.logger.debug('RPC Response: %s', response['data'])
 
         rpc_response = self.transport.loads(response['data'])
 
@@ -261,7 +262,7 @@ class Client(RedisBase):
 
             response_repr[k] = v
         response_repr['duration'] = str(datetime.now() - start)
-        logger.info('', dict(rpc_responses=[response_repr]))
+        self.logger.info('', dict(rpc_responses=[response_repr]))
 
         if 'return_value' in rpc_response:
             if rpc_response.get('return_type'):
@@ -271,7 +272,7 @@ class Client(RedisBase):
 
             response = Class_(rpc_response['return_value'])
         else:
-            logger.warn('No return value in: %r' % rpc_response)
+            self.logger.warn('No return value in: %r' % rpc_response)
             response = None
 
         if 'exception' in rpc_response:
@@ -283,7 +284,7 @@ class Client(RedisBase):
 
             exception = Exception(rpc_response['exception'])
             exception.response = response
-            logger.exception(repr(exception))
+            self.logger.exception(repr(exception))
 
             raise exception
         else:
@@ -311,7 +312,7 @@ class Server(RedisBase):
             if message['type'] != 'message':
                 continue
 
-            logger.debug('RPC Request: %s' % message['data'])
+            self.logger.debug('RPC Request: %s' % message['data'])
             transport, rpc_request = decode_message(message['data'])
             response_queue = rpc_request['response_queue']
 
@@ -334,7 +335,7 @@ class Server(RedisBase):
                     exception_type=type(e).__name__,
                 )
             message = transport.dumps(rpc_response)
-            logger.debug('RPC Response: %s' % message)
+            self.logger.debug('RPC Response: %s' % message)
 
             self.get_redis_server().publish(response_queue, message)
 
@@ -360,11 +361,13 @@ class FromNameMixin(object):
     classes = None
 
     def __init__(self, data=None):
+        self.logger = logging.getLogger('redisrpc.%s' %
+                                        self.__class__.__name__)
         if data:
             if isinstance(data, dict):
                 self.__dict__.update(data)
             else:
-                logger.error(
+                self.logger.error(
                     'Unexpected data for %s: %r', self.__class__, data)
 
     def get(self, key, default=None):
