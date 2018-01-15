@@ -16,7 +16,6 @@
 
 import json
 import logging
-import pprint
 import pickle
 import random
 import string
@@ -377,20 +376,7 @@ class FromNameMixin(object):
         return self.get(key)
 
     def __repr__(self):
-        try:
-            return json.dumps(self.__dict__)
-        except TypeError:
-            data = dict()
-            for k, v in self.__dict__.items():
-                try:
-                    json.dumps(v)
-                    data[k] = v
-                except TypeError:
-                    v = pprint.pformat(v)
-                    logging.warn('Unable to serialize %s' % k,
-                                 dict(unserializable=v))
-
-            return json.dumps(data)
+        return json.dumps(self.__dict__)
 
     @classmethod
     def from_name(cls, key, *keys):
