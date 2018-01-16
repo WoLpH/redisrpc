@@ -16,6 +16,7 @@
 
 import json
 import logging
+import pprint
 import pickle
 import random
 import string
@@ -33,6 +34,7 @@ __all__ = [
 ]
 
 
+logger = logging.getLogger(__name__)
 
 
 if sys.version_info < (3,):
@@ -146,10 +148,8 @@ class PickleTransport(object):
 class RedisBase(object):
 
     def __init__(self, redis_args=None):
-        self.logger = logging.getLogger('redisrpc.%s' %
-                                        self.__class__.__name__)
         self.redis_args = redis_args or dict()
-        self.logger.debug('RPC Redis args: %s', self.redis_args)
+        logger.debug('RPC Redis args: %s', self.redis_args)
 
         self.pubsub = None
         self.redis_server = None
@@ -207,7 +207,7 @@ class Client(RedisBase):
             response_queue=response_queue,
         )
         message = self.transport.dumps(rpc_request)
-        self.logger.debug('RPC Request: %s' % message)
+        logger.debug('RPC Request: %s' % message)
         redis_server = self.get_redis_server()
 
         subscribers = dict(redis_server.pubsub_numsub(self.message_queue))
@@ -246,7 +246,7 @@ class Client(RedisBase):
 
         assert response['channel'] == response_queue
 
-        self.logger.debug('RPC Response: %s', response['data'])
+        logger.debug('RPC Response: %s', response['data'])
 
         rpc_response = self.transport.loads(response['data'])
 
@@ -261,7 +261,7 @@ class Client(RedisBase):
 
             response_repr[k] = v
         response_repr['duration'] = str(datetime.now() - start)
-        self.logger.info('', dict(rpc_responses=[response_repr]))
+        logger.info('', dict(rpc_responses=[response_repr]))
 
         if 'return_value' in rpc_response:
             if rpc_response.get('return_type'):
@@ -271,7 +271,7 @@ class Client(RedisBase):
 
             response = Class_(rpc_response['return_value'])
         else:
-            self.logger.warn('No return value in: %r' % rpc_response)
+            logger.warn('No return value in: %r' % rpc_response)
             response = None
 
         if 'exception' in rpc_response:
@@ -283,7 +283,7 @@ class Client(RedisBase):
 
             exception = Exception(rpc_response['exception'])
             exception.response = response
-            self.logger.exception(repr(exception))
+            logger.exception(repr(exception))
 
             raise exception
         else:
@@ -311,7 +311,7 @@ class Server(RedisBase):
             if message['type'] != 'message':
                 continue
 
-            self.logger.debug('RPC Request: %s' % message['data'])
+            logger.debug('RPC Request: %s' % message['data'])
             transport, rpc_request = decode_message(message['data'])
             response_queue = rpc_request['response_queue']
 
@@ -334,7 +334,7 @@ class Server(RedisBase):
                     exception_type=type(e).__name__,
                 )
             message = transport.dumps(rpc_response)
-            self.logger.debug('RPC Response: %s' % message)
+            logger.debug('RPC Response: %s' % message)
 
             self.get_redis_server().publish(response_queue, message)
 
@@ -360,13 +360,11 @@ class FromNameMixin(object):
     classes = None
 
     def __init__(self, data=None):
-        self.logger = logging.getLogger('redisrpc.%s' %
-                                        self.__class__.__name__)
         if data:
             if isinstance(data, dict):
                 self.__dict__.update(data)
             else:
-                self.logger.error(
+                logger.error(
                     'Unexpected data for %s: %r', self.__class__, data)
 
     def get(self, key, default=None):
@@ -376,7 +374,20 @@ class FromNameMixin(object):
         return self.get(key)
 
     def __repr__(self):
-        return json.dumps(self.__dict__)
+        try:
+            return json.dumps(self.__dict__)
+        except TypeError:
+            data = dict()
+            for k, v in self.__dict__.items():
+                try:
+                    json.dumps(v)
+                    data[k] = v
+                except TypeError:
+                    v = pprint.pformat(v)
+                    logging.warn('Unable to serialize %s' % k,
+                                 dict(unserializable=v))
+
+            return json.dumps(data)
 
     @classmethod
     def from_name(cls, key, *keys):
