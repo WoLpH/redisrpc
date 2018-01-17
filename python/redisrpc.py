@@ -311,6 +311,9 @@ class Server(RedisBase):
         RedisBase.__init__(self, redis_args)
 
     def run(self):
+        subscribers = self.get_redis_server().pubsub_numsub(self.local_objects)
+        assert not subscribers, 'Someone is already subscribed to %r' % (
+            subscribers)
         # Flush the message queue.
         pubsub = self.get_pubsub()
         pubsub.subscribe(self.local_objects)
