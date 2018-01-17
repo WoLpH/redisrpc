@@ -61,8 +61,6 @@ class curry:
             kw.update(kwargs)
         else:
             kw = kwargs or self.kwargs
-            logger.debug('pending: %r, args: %s, kwargs: %s' % (
-                self.pending, args, kw))
             return self.fun(*(self.pending + args), **kw)
 
 
