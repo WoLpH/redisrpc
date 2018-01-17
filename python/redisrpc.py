@@ -330,10 +330,12 @@ class Server(RedisBase):
                     return_value=response,
                 )
             except Exception as e:
-                traceback.print_exc()
+                trace = traceback.format_exc()
+                logger.exception(trace)
                 rpc_response = dict(
                     exception=str(e),
                     exception_type=type(e).__name__,
+                    exception_trace=trace,
                 )
             message = transport.dumps(rpc_response)
             logger.debug('RPC Response: %s' % message)
