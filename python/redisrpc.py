@@ -61,6 +61,8 @@ class curry:
             kw.update(kwargs)
         else:
             kw = kwargs or self.kwargs
+            logger.debug('pending: %r, args: %s, kwargs: %s' % (
+                self.pending, args, kw))
             return self.fun(*(self.pending + args), **kw)
 
 
@@ -99,6 +101,9 @@ class FunctionCall(dict):
         else:
             params = ','.join([argstring, kwargstring])
         return '%s(%s)' % (self['name'], params)
+
+    def __str__(self):
+        return self.as_python_code()
 
 
 def decode_message(message):
@@ -254,7 +259,7 @@ class Client(RedisBase):
         response_repr = dict()
         repr_keys = set(('return_value', 'response', 'exception'))
         for k, v in rpc_response.items():
-            if isinstance(v, (dict, list, set)) or k in repr_keys:
+            if isinstance(v, (dict, list, set)) or k in repr_keys and v:
                 v = repr(v)
                 k += '_repr'
                 if len(v) > 2000:
@@ -262,9 +267,10 @@ class Client(RedisBase):
 
             response_repr[k] = v
         response_repr['duration'] = str(datetime.now() - start)
-        logger.info('', dict(rpc_responses=[response_repr]))
 
         if 'return_value' in rpc_response:
+            logger.info('%s returned' % function_call,
+                        dict(rpc_responses=[response_repr]))
             if rpc_response.get('return_type'):
                 Class_ = Response.from_name(rpc_response.get('return_type'))
             else:
@@ -272,7 +278,8 @@ class Client(RedisBase):
 
             response = Class_(rpc_response['return_value'])
         else:
-            logger.warn('No return value in: %r' % rpc_response)
+            logger.info('no return value for %s' % function_call,
+                        dict(rpc_responses=[response_repr]))
             response = None
 
         if 'exception' in rpc_response:
