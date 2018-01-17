@@ -309,12 +309,15 @@ class Server(RedisBase):
         RedisBase.__init__(self, redis_args)
 
     def run(self):
-        subscribers = self.get_redis_server().pubsub_numsub(self.local_objects)
-        assert not subscribers, 'Someone is already subscribed to %r' % (
-            subscribers)
+        subscriptions = self.local_objects.keys()
+        for channel, subscribers in self.get_redis_server().pubsub_numsub(
+                subscriptions):
+            assert not subscribers, 'Someone is already subscribed to %r' % (
+                subscribers)
+
         # Flush the message queue.
         pubsub = self.get_pubsub()
-        pubsub.subscribe(self.local_objects)
+        pubsub.subscribe(subscriptions)
 
         for message in pubsub.listen():
             if message['type'] != 'message':
