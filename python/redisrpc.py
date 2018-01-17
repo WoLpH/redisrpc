@@ -23,6 +23,7 @@ import string
 import sys
 import redis
 import collections
+import traceback
 from datetime import datetime
 
 
@@ -329,6 +330,7 @@ class Server(RedisBase):
                     return_value=response,
                 )
             except Exception as e:
+                traceback.print_exc()
                 rpc_response = dict(
                     exception=str(e),
                     exception_type=type(e).__name__,
@@ -374,20 +376,7 @@ class FromNameMixin(object):
         return self.get(key)
 
     def __repr__(self):
-        try:
-            return json.dumps(self.__dict__)
-        except TypeError:
-            data = dict()
-            for k, v in self.__dict__.items():
-                try:
-                    json.dumps(v)
-                    data[k] = v
-                except TypeError:
-                    v = pprint.pformat(v)
-                    logging.warn('Unable to serialize %s' % k,
-                                 dict(unserializable=v))
-
-            return json.dumps(data)
+        return json.dumps(self.__dict__)
 
     @classmethod
     def from_name(cls, key, *keys):
