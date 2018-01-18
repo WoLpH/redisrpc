@@ -265,10 +265,10 @@ class Client(RedisBase):
 
             response_repr[k] = v
         response_repr['duration'] = str(datetime.now() - start)
+        response_repr['call'] = str(function_call)
 
+        logger.info('' % function_call, dict(rpc_responses=[response_repr]))
         if 'return_value' in rpc_response:
-            logger.info('%s returned' % function_call,
-                        dict(rpc_responses=[response_repr]))
             if rpc_response.get('return_type'):
                 Class_ = Response.from_name(rpc_response.get('return_type'))
             else:
@@ -276,8 +276,6 @@ class Client(RedisBase):
 
             response = Class_(rpc_response['return_value'])
         else:
-            logger.info('no return value for %s' % function_call,
-                        dict(rpc_responses=[response_repr]))
             response = None
 
         if 'exception' in rpc_response:
@@ -341,8 +339,6 @@ class Server(RedisBase):
                     return_value=response,
                 )
             except Exception as e:
-                trace = traceback.format_exc()
-                logger.exception(trace)
                 rpc_response = dict(
                     exception=str(e),
                     exception_type=type(e).__name__,
