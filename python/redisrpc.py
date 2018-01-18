@@ -260,8 +260,8 @@ class Client(RedisBase):
             if isinstance(v, (dict, list, set)) or k in repr_keys and v:
                 v = repr(v)
                 k += '_repr'
-                if len(v) > 2000:
-                    v = v[:2000] + '...'
+                if len(v) > 2048:
+                    v = v[:1024] + '...' + v[-1024:]
 
             response_repr[k] = v
         response_repr['duration'] = str(datetime.now() - start)
