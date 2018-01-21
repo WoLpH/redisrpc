@@ -35,6 +35,11 @@ __all__ = [
 ]
 
 
+def json_default(value):
+    if isinstance(value, FromNameMixin):
+        return value.__dict__
+
+
 logger = logging.getLogger(__name__)
 
 
