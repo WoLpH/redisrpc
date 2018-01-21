@@ -390,7 +390,7 @@ class FromNameMixin(object):
         return self.get(key)
 
     def __repr__(self):
-        return json.dumps(self.__dict__)
+        return json.dumps(self.__dict__, default=json_default)
 
     @classmethod
     def from_name(cls, key, *keys):
