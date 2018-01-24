@@ -269,7 +269,10 @@ class Client(RedisBase):
                     v = v[:1024] + '...' + v[-1024:]
 
             response_repr[k] = v
-        response_repr['duration'] = str(datetime.now() - start)
+
+        duration = datetime.now() - start
+        response_repr['duration'] = str(duration)
+        response_repr['duration_ms'] = duration.total_seconds()
         response_repr['call'] = str(function_call)
 
         logger.info('' % function_call, dict(rpc_responses=[response_repr]))
