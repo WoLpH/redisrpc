@@ -278,7 +278,7 @@ class Client(RedisBase):
                 k += '_repr'
                 v = vs
 
-            elif isinstance(v, dict) or k in repr_keys and v:
+            elif isinstance(v, dict) and v:
                 ks = sorted(v)
                 if len(ks) > 10:
                     ks = ks[:5] + ['...'] + ks[-5:]
