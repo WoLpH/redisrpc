@@ -262,17 +262,50 @@ class Client(RedisBase):
         response_repr = dict()
         repr_keys = set(('return_value', 'response', 'exception'))
         for k, v in rpc_response.items():
-            if isinstance(v, (dict, list, set)) or k in repr_keys and v:
-                v = repr(v)
+            if isinstance(v, (list, set)) and v:
+                if len(v) > 10:
+                    vs = v[:5] + ['...'] + v[-5:]
+                else:
+                    vs = v
+
+                for i, v in enumerate(vs):
+                    v = repr(v)
+                    if len(v) > 100:
+                        v = v[:50] + '...' + v[-50:]
+
+                    vs[i] = v
+
                 k += '_repr'
-                if len(v) > 2048:
-                    v = v[:1024] + '...' + v[-1024:]
+                v = vs
+
+            elif isinstance(v, dict) or k in repr_keys and v:
+                ks = sorted(v)
+                if len(ks) > 10:
+                    ks = ks[:5] + ['...'] + ks[-5:]
+
+                vs = {k: v.get(k, '...') for k in ks}
+                for k, v in vs.items():
+                    v = repr(v)
+
+                    if len(v) > 100:
+                        v = v[:50] + '...' + v[-50:]
+
+                    vs[k] = v
+
+                k += '_repr'
+                v = vs
+
+            elif k in repr_keys and v:
+                v_repr = repr(v)
+                k += '_repr'
+                if len(v_repr) > 256:
+                    v_repr = v_repr[:128] + '...' + v_repr[-128:]
 
             response_repr[k] = v
 
         duration = datetime.now() - start
         response_repr['duration'] = str(duration)
-        response_repr['duration_ms'] = duration.total_seconds()
+        response_repr['duration_ms'] = duration.total_seconds() * 1000
         response_repr['call'] = str(function_call)
 
         logger.info('' % function_call, dict(rpc_responses=[response_repr]))
