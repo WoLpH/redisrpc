@@ -307,7 +307,9 @@ class Client(RedisBase):
         response_repr['duration'] = str(duration)
         response_repr['duration_ms'] = duration.total_seconds() * 1000
         response_repr['call'] = str(function_call)
-        response_repr = json.dumps(response_repr, default=json_default)
+
+        if response_repr:
+            response_repr = json.dumps(response_repr, default=json_default)
 
         logger.info('' % function_call, dict(rpc_responses=[response_repr]))
         if 'return_value' in rpc_response:
