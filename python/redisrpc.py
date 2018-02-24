@@ -298,8 +298,8 @@ class Client(RedisBase):
             elif k in repr_keys and v:
                 v_repr = repr(v)
                 k += '_repr'
-                if len(v_repr) > 256:
-                    v_repr = v_repr[:128] + '...' + v_repr[-128:]
+                if len(v_repr) > 100:
+                    v_repr = v_repr[:50] + '...' + v_repr[-50:]
 
             response_repr[k] = v
 
@@ -307,9 +307,6 @@ class Client(RedisBase):
         response_repr['duration'] = str(duration)
         response_repr['duration_ms'] = duration.total_seconds() * 1000
         response_repr['call'] = str(function_call)
-
-        if response_repr:
-            response_repr = json.dumps(response_repr, default=json_default)
 
         logger.info('' % function_call, dict(rpc_responses=[response_repr]))
         if 'return_value' in rpc_response:
