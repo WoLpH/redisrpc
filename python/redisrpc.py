@@ -276,7 +276,7 @@ class Client(RedisBase):
                     vs[i] = v
 
                 k += '_repr'
-                v = vs
+                v = repr(vs)
 
             elif isinstance(v, dict) and v:
                 ks = sorted(v)
@@ -293,7 +293,7 @@ class Client(RedisBase):
                     vs[k] = v
 
                 k += '_repr'
-                v = vs
+                v = repr(vs)
 
             elif k in repr_keys and v:
                 v_repr = repr(v)
