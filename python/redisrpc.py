@@ -283,14 +283,14 @@ class Client(RedisBase):
                 if len(ks) > 10:
                     ks = ks[:5] + ['...'] + ks[-5:]
 
-                vs = {k: v.get(k, '...') for k in ks}
-                for k, v in vs.items():
+                vs = {k2: v.get(k2, '...') for k2 in ks}
+                for k2, v in vs.items():
                     v = repr(v)
 
                     if len(v) > 100:
                         v = v[:50] + '...' + v[-50:]
 
-                    vs[k] = v
+                    vs[k2] = v
 
                 k += '_repr'
                 v = repr(vs)
