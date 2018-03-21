@@ -383,7 +383,6 @@ class Server(RedisBase):
                 rpc_response = dict(
                     exception=str(e),
                     exception_type=type(e).__name__,
-                    exception_trace=trace,
                 )
             message = transport.dumps(rpc_response)
             logger.debug('RPC Response: %s' % message)
