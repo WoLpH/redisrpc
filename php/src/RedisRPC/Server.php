@@ -91,12 +91,12 @@ class Server {
         $redis_server = new Predis\Client($this->redis_args);
         foreach($this->local_objects as $key => $local_object){
             $subscribers = $redis_server->pubsub('numsub', $key);
-            # if($subscribers[$key] != 0){
-            #     echo 'Server already running for ' . $key . PHP_EOL;
-            # }else{
+            if($subscribers[$key] != 0){
+                echo 'Server already running for ' . $key . PHP_EOL;
+            }else{
                 $this->pubsub->subscribe($key);
                 $started++;
-            # }
+            }
         }
         unset($redis_server);
         if($started == 0){
