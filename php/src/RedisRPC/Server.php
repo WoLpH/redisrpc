@@ -68,11 +68,11 @@ class Server {
 
     public function add_local_object($key, $value){
         $this->local_objects[$key] = $value;
-        $this->pubsub->subscribe($key);
+        $this->pubsub->subscribe($key . ':server');
     }
 
     public function remove_local_object($key){
-        $this->pubsub->unsubscribe($key);
+        $this->pubsub->unsubscribe($key . ':server');
         unset($this->local_objects[$key]);
     }
 
