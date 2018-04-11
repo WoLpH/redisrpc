@@ -219,15 +219,16 @@ class Client(RedisBase):
         logger.debug('RPC Request: %s' % message)
         redis_server = self.get_redis_server()
 
-        subscribers = dict(redis_server.pubsub_numsub(self.message_queue))
-        if int(subscribers[self.message_queue]) == 0:
+        message_queue = self.message_queue + ':server'
+        subscribers = dict(redis_server.pubsub_numsub(message_queue))
+        if int(subscribers[message_queue]) == 0:
             raise NoServerAvailableException(
-                'No servers available for queue %s' % self.message_queue)
+                'No servers available for queue %s' % message_queue)
 
         pubsub = self.get_pubsub()
         pubsub.subscribe(response_queue)
         start = datetime.now()
-        redis_server.publish(self.message_queue, message)
+        redis_server.publish(message_queue, message)
 
         while pubsub.subscribed:
             if self.timeout:
@@ -349,6 +350,7 @@ class Server(RedisBase):
 
     def run(self):
         subscriptions = self.local_objects.keys()
+        subscriptions = [s + ':server' for s in subscriptions]
         for channel, subscribers in self.get_redis_server().pubsub_numsub(
                 subscriptions):
             assert not subscribers, 'Someone is already subscribed to %r' % (
@@ -369,7 +371,8 @@ class Server(RedisBase):
             function_call = FunctionCall.from_dict(
                 rpc_request['function_call'])
             try:
-                local_object = self.local_objects[message['channel']]
+                message_queue = message['channel'][:-7]
+                local_object = self.local_objects[message_queue]
                 method = getattr(local_object, function_call['name'])
                 response = method(
                     *function_call['args'],
