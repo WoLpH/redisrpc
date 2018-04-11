@@ -111,15 +111,14 @@ class Client {
         $this->redis_pubsub_server = new Predis\Client($this->redis_args);
         $pubsub = $this->redis_pubsub_server->pubSubLoop();
 
-        $message_queue = $this->message_queue . ':server';
-        $subscribers = $this->redis_server->pubsub('numsub', $message_queue);
-        if($subscribers[$message_queue] == 0){
+        $subscribers = $this->redis_server->pubsub('numsub', $this->message_queue);
+        if($subscribers[$this->message_queue] == 0){
             throw new \RuntimeException('No servers available for queue ' .
-                $message_queue);
+                $this->message_queue);
         }
 
         $pubsub->subscribe($response_queue);
-        $this->redis_server->publish($message_queue, $request);
+        $this->redis_server->publish($this->message_queue, $request);
         $this->redis_server->disconnect();
 
         $response = null;

@@ -90,12 +90,11 @@ class Server {
         $started = 0;
         $redis_server = new Predis\Client($this->redis_args);
         foreach($this->local_objects as $key => $local_object){
-            $message_queue = $key . ':server';
-            $subscribers = $redis_server->pubsub('numsub', $message_queue);
-            if($subscribers[$message_queue] != 0){
-                echo 'Server already running for ' . $message_queue . PHP_EOL;
+            $subscribers = $redis_server->pubsub('numsub', $key);
+            if($subscribers[$key] != 0){
+                echo 'Server already running for ' . $key . PHP_EOL;
             }else{
-                $this->pubsub->subscribe($message_queue);
+                $this->pubsub->subscribe($key);
                 $started++;
             }
         }
@@ -116,8 +115,8 @@ class Server {
             }
 
             // assert($message->channel == $this->message_queue);
-            $message_queue = substr($message->channel, 0, -7);
-            $local_object = $this->local_objects[$message_queue];
+            // $message_queue = $message
+            $local_object = $this->local_objects[$message->channel];
 
             $rpc_request = json_decode($message->payload);
             $response_queue = $rpc_request->response_queue;
