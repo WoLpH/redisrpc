@@ -164,6 +164,7 @@ class Server {
             $redis_server = new Predis\Client($this->redis_args);
             $redis_server->publish($response_queue, $message);
             unset($redis_server);
+            gc_collect_cycles();
         }
     }
 }
