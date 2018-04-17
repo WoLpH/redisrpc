@@ -90,8 +90,16 @@ class FunctionCall(dict):
     def as_python_code(self):
         '''Return a string representation of this object that can be evaled to
         execute the function call.'''
-        argstring = '' if 'args' not in self else \
-            ','.join(str(arg) for arg in self['args'])
+        args = []
+        for arg in self['args']:
+            if isinstance(arg, unicode):
+                arg = arg.encode('utf-8')
+            else:
+                arg = str(arg)
+
+            args.append(arg)
+
+        argstring = '' if 'args' not in self else ','.join(args)
         kwargstring = '' if 'kwargs' not in self else ','.join(
             '%s=%s' %
             (key, val) for (
