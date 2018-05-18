@@ -1,4 +1,4 @@
-# Copyright (C) 2017.  Rick van Hattem <wolph@wol.ph>
+# Copyright (C) 2018.  Rick van Hattem <wolph@wol.ph>
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -43,8 +43,11 @@ def json_default(value):
 logger = logging.getLogger(__name__)
 
 
-if sys.version_info < (3,):
-    range = xrange
+if sys.version_info.major == 2:
+    range = xrange  # NOQA
+else:
+    unicode = str
+    basestring = str, bytes
 
 
 def random_string(size=8, chars=string.ascii_uppercase + string.digits):
@@ -92,7 +95,7 @@ class FunctionCall(dict):
         execute the function call.'''
         args = []
         for arg in self['args']:
-            if isinstance(arg, unicode):
+            if isinstance(arg, unicode) and sys.version_info.major == 2:
                 arg = arg.encode('utf-8')
             else:
                 arg = str(arg)
@@ -141,7 +144,7 @@ class JSONTransport(object):
         return json.dumps(obj)
 
     def loads(self, obj):
-        return json.loads(obj.decode())
+        return json.loads(obj)
 
 
 class PickleTransport(object):
@@ -166,6 +169,7 @@ class RedisBase(object):
 
     def __init__(self, redis_args=None):
         self.redis_args = redis_args or dict()
+        self.redis_args['decode_responses'] = True
         logger.debug('RPC Redis args: %s', self.redis_args)
 
         self.pubsub = None
@@ -229,9 +233,10 @@ class Client(RedisBase):
 
         message_queue = self.message_queue + ':server'
         subscribers = dict(redis_server.pubsub_numsub(message_queue))
-        if int(subscribers[message_queue]) == 0:
+        if int(subscribers.get(message_queue, 0)) == 0:
             raise NoServerAvailableException(
-                'No servers available for queue %s' % message_queue)
+                'No servers available for queue %s' % message_queue,
+                subscribers)
 
         pubsub = self.get_pubsub()
         pubsub.subscribe(response_queue)
