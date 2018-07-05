@@ -38,7 +38,7 @@ if (!function_exists("debug_print")) {
  *
  * @author Nathan Farrington <nfarring@gmail.com>
  */
-class Server {
+class AsyncServer {
 
     private $pubsub;
     private $redis_args;
@@ -80,12 +80,18 @@ class Server {
         return array_keys($this->local_objects);
     }
 
+    private async function pubsub_generator(): AsyncIterator<array>{
+        foreach($this->pubsub await as $message){
+            yield $message;
+        }
+    }
+
     /**
      * Starts the server.
      */
-    public function run() {
+    public async function run() {
         $this->redis_pubsub_server = new Predis\Client($this->redis_args);
-        $this->pubsub = $this->redis_pubsub_server->pubSubLoop();
+        $this->pubsub = $this->redis_pubsub_server->asyncPubSubLoop();
 
         $started = 0;
         $redis_server = new Predis\Client($this->redis_args);
@@ -105,21 +111,23 @@ class Server {
                 implode(', ', array_keys($this->local_objects)));
         }
 
-        foreach($this->pubsub as $message){
-            # Pop a message from the queue.
-            # Decode the message.
-            # Check that the function exists.
+        $generator = $this->pubsub->generator();
+        foreach($generator await as $message){
             if($message->kind != 'message'){
                 # debug_print('Ignoring ' . $message->kind . ': ' .
                 #     $message->payload);
                 continue;
             }
 
-            $this->run_message($message);
+            await $this->run_message($message);
         }
     }
 
-    public function run_message($message){
+    public async function run_message($message){
+        # Pop a message from the queue.
+        # Decode the message.
+        # Check that the function exists.
+        #
         // assert($message->channel == $this->message_queue);
         $message_queue = substr($message->channel, 0, -7);
         $local_object = $this->local_objects[$message_queue];
@@ -138,7 +146,7 @@ class Server {
                 '" does not exist');
         }else{
             try {
-                $response_value = call_user_func_array(
+                $response_value = await call_user_func_array(
                     array($local_object, $function_call->name),
                     $function_call->args);
 
@@ -174,5 +182,3 @@ class Server {
         gc_collect_cycles();
     }
 }
-
-?>
