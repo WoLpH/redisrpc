@@ -320,11 +320,11 @@ class Client(RedisBase):
         response_repr['duration_ms'] = duration.total_seconds() * 1000
         response_repr['call'] = str(function_call)
 
-        duration = functools.partial(redisrpc_duration.labels,
-                                     method=method_name)
-        channel_duration = functools.partial(redisrpc_duration.labels,
-                                     channel=self.message_queue,
-                                     method=method_name)
+        prom_duration = functools.partial(redisrpc_duration.labels,
+                                          method=method_name)
+        prom_channel_duration = functools.partial(redisrpc_duration.labels,
+                                                  channel=self.message_queue,
+                                                  method=method_name)
 
         logger.info('' % function_call, dict(rpc_responses=[response_repr]))
         if 'return_value' in rpc_response:
@@ -350,14 +350,15 @@ class Client(RedisBase):
             exception.response = response
             logger.exception(repr(exception))
 
-            duration(exception=exception_name).observe(
+            prom_duration(exception=exception_name).observe(
                 duration.total_seconds())
-            channel_duration(exception=exception_name).observe(
+            prom_channel_duration(exception=exception_name).observe(
                 duration.total_seconds())
             raise exception
         else:
-            duration(exception='').observe(duration.total_seconds())
-            channel_duration(exception='').observe(duration.total_seconds())
+            prom_duration(exception='').observe(duration.total_seconds())
+            prom_channel_duration(exception='').observe(
+                duration.total_seconds())
             return response
 
     def __getattr__(self, name):
