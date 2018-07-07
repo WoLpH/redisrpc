@@ -14,16 +14,17 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 
+import sys
 import json
-import logging
+import redis
 import pprint
 import pickle
 import random
 import string
-import sys
-import redis
-import collections
+import logging
+import functools
 import traceback
+import collections
 import prometheus_client
 from datetime import datetime
 
@@ -42,9 +43,13 @@ def json_default(value):
 
 
 logger = logging.getLogger(__name__)
+redisrpc_channel_duration = prometheus_client.Histogram(
+    'redisrpc_channel_duration', 'Duration of redisrpc call',
+    ['channel', 'method', 'exception'],
+)
 redisrpc_duration = prometheus_client.Histogram(
     'redisrpc_duration', 'Duration of redisrpc call',
-    ['command'],
+    ['method', 'exception'],
 )
 
 
@@ -58,23 +63,6 @@ else:
 def random_string(size=8, chars=string.ascii_uppercase + string.digits):
     '''Ref: http://stackoverflow.com/questions/2257441'''
     return ''.join(random.choice(chars) for x in range(size))
-
-
-class curry:
-    '''Ref: https://jonathanharrington.wordpress.com/2007/11/01/currying-and-python-a-practical-example/'''
-
-    def __init__(self, fun, *args, **kwargs):
-        self.fun = fun
-        self.pending = args[:]
-        self.kwargs = kwargs.copy()
-
-    def __call__(self, *args, **kwargs):
-        if kwargs and self.kwargs:
-            kw = self.kwargs.copy()
-            kw.update(kwargs)
-        else:
-            kw = kwargs or self.kwargs
-            return self.fun(*(self.pending + args), **kw)
 
 
 class FunctionCall(dict):
@@ -332,8 +320,11 @@ class Client(RedisBase):
         response_repr['duration_ms'] = duration.total_seconds() * 1000
         response_repr['call'] = str(function_call)
 
-        # redisrpc_duration.labels(
-        # ).observe(duration.total_seconds())
+        duration = functools.partial(redisrpc_duration.labels,
+                                     method=method_name)
+        channel_duration = functools.partial(redisrpc_duration.labels,
+                                     channel=self.message_queue,
+                                     method=method_name)
 
         logger.info('' % function_call, dict(rpc_responses=[response_repr]))
         if 'return_value' in rpc_response:
@@ -350,20 +341,28 @@ class Client(RedisBase):
             if rpc_response.get('exception_type'):
                 Exception = RemoteException.from_name(
                     rpc_response['exception_type'])
+                exception_name = rpc_response['exception_type']
             else:
                 Exception = RemoteException
+                exception_name = 'RemoteException'
 
             exception = Exception(rpc_response['exception'])
             exception.response = response
             logger.exception(repr(exception))
 
+            duration(exception=exception_name).observe(
+                duration.total_seconds())
+            channel_duration(exception=exception_name).observe(
+                duration.total_seconds())
             raise exception
         else:
+            duration(exception='').observe(duration.total_seconds())
+            channel_duration(exception='').observe(duration.total_seconds())
             return response
 
     def __getattr__(self, name):
         '''Treat missing attributes as remote method call invocations.'''
-        return curry(self.call, name)
+        return functools.partial(self.call, name)
 
 
 class Server(RedisBase):
