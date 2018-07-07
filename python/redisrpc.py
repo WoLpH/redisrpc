@@ -24,6 +24,7 @@ import sys
 import redis
 import collections
 import traceback
+import prometheus_client
 from datetime import datetime
 
 
@@ -41,6 +42,10 @@ def json_default(value):
 
 
 logger = logging.getLogger(__name__)
+redisrpc_duration = prometheus_client.Histogram(
+    'redisrpc_duration', 'Duration of redisrpc call',
+    ['command'],
+)
 
 
 if sys.version_info.major == 2:
@@ -240,8 +245,7 @@ class Client(RedisBase):
         message_queue = self.message_queue + ':server'
         if not self.has_subscribers(message_queue):
             raise NoServerAvailableException(
-                'No servers available for queue %s' % message_queue,
-                subscribers)
+                'No servers available for queue %s' % message_queue)
 
         pubsub = self.get_pubsub()
         pubsub.subscribe(response_queue)
@@ -327,6 +331,9 @@ class Client(RedisBase):
         response_repr['duration'] = str(duration)
         response_repr['duration_ms'] = duration.total_seconds() * 1000
         response_repr['call'] = str(function_call)
+
+        # redisrpc_duration.labels(
+        # ).observe(duration.total_seconds())
 
         logger.info('' % function_call, dict(rpc_responses=[response_repr]))
         if 'return_value' in rpc_response:
