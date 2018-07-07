@@ -45,10 +45,18 @@ def json_default(value):
 logger = logging.getLogger(__name__)
 redisrpc_channel_duration = prometheus_client.Histogram(
     'redisrpc_channel_duration', 'Duration of redisrpc call',
-    ['channel', 'method', 'exception'],
+    ['channel', 'method'],
 )
 redisrpc_duration = prometheus_client.Histogram(
     'redisrpc_duration', 'Duration of redisrpc call',
+    ['method'],
+)
+redisrpc_channel_exception_duration = prometheus_client.Histogram(
+    'redisrpc_channel_exception_duration', 'Duration of redisrpc call',
+    ['channel', 'method', 'exception'],
+)
+redisrpc_exception_duration = prometheus_client.Histogram(
+    'redisrpc_exception_duration', 'Duration of redisrpc call',
     ['method', 'exception'],
 )
 
@@ -320,12 +328,6 @@ class Client(RedisBase):
         response_repr['duration_ms'] = duration.total_seconds() * 1000
         response_repr['call'] = str(function_call)
 
-        prom_duration = functools.partial(redisrpc_duration.labels,
-                                          method=method_name)
-        prom_channel_duration = functools.partial(redisrpc_duration.labels,
-                                                  channel=self.message_queue,
-                                                  method=method_name)
-
         logger.info('' % function_call, dict(rpc_responses=[response_repr]))
         if 'return_value' in rpc_response:
             if rpc_response.get('return_type'):
@@ -350,15 +352,21 @@ class Client(RedisBase):
             exception.response = response
             logger.exception(repr(exception))
 
-            prom_duration(exception=exception_name).observe(
-                duration.total_seconds())
-            prom_channel_duration(exception=exception_name).observe(
-                duration.total_seconds())
+            labels = dict(
+                method=method_name,
+                exception=exception_name,
+            )
+            redisrpc_exception_duration.labels(**labels).observe(duration.total_seconds)
+            redisrpc_channel_exception_duration.labels(
+                channel=self.message_queue,
+                **labels).observe(duration.total_seconds)
             raise exception
         else:
-            prom_duration(exception='').observe(duration.total_seconds())
-            prom_channel_duration(exception='').observe(
-                duration.total_seconds())
+            labels = dict(method=method_name)
+            redisrpc_duration.labels(**labels).observe(duration.total_seconds)
+            redisrpc_channel_duration.labels(
+                channel=self.message_queue,
+                **labels).observe(duration.total_seconds)
             return response
 
     def __getattr__(self, name):
