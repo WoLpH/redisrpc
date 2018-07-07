@@ -356,17 +356,18 @@ class Client(RedisBase):
                 method=method_name,
                 exception=exception_name,
             )
-            redisrpc_exception_duration.labels(**labels).observe(duration.total_seconds)
+            redisrpc_exception_duration.labels(**labels).observe(
+                duration.total_seconds)))
             redisrpc_channel_exception_duration.labels(
                 channel=self.message_queue,
-                **labels).observe(duration.total_seconds)
+                **labels).observe(duration.total_seconds)))
             raise exception
         else:
             labels = dict(method=method_name)
-            redisrpc_duration.labels(**labels).observe(duration.total_seconds)
+            redisrpc_duration.labels(**labels).observe(duration.total_seconds)))
             redisrpc_channel_duration.labels(
                 channel=self.message_queue,
-                **labels).observe(duration.total_seconds)
+                **labels).observe(duration.total_seconds())
             return response
 
     def __getattr__(self, name):
