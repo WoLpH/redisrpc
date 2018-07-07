@@ -73,6 +73,23 @@ def random_string(size=8, chars=string.ascii_uppercase + string.digits):
     return ''.join(random.choice(chars) for x in range(size))
 
 
+class curry:
+    '''Ref: https://jonathanharrington.wordpress.com/2007/11/01/currying-and-python-a-practical-example/'''
+
+    def __init__(self, fun, *args, **kwargs):
+        self.fun = fun
+        self.pending = args[:]
+        self.kwargs = kwargs.copy()
+
+    def __call__(self, *args, **kwargs):
+        if kwargs and self.kwargs:
+            kw = self.kwargs.copy()
+            kw.update(kwargs)
+        else:
+            kw = kwargs or self.kwargs
+            return self.fun(*(self.pending + args), **kw)
+
+
 class FunctionCall(dict):
     '''Encapsulates a function call as a Python dictionary.'''
 
@@ -372,7 +389,7 @@ class Client(RedisBase):
 
     def __getattr__(self, name):
         '''Treat missing attributes as remote method call invocations.'''
-        return functools.partial(self.call, name)
+        return curry(self.call, name)
 
 
 class Server(RedisBase):
