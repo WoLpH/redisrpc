@@ -43,17 +43,9 @@ def json_default(value):
 
 
 logger = logging.getLogger(__name__)
-redisrpc_channel_duration = prometheus_client.Histogram(
-    'redisrpc_channel_duration', 'Duration of redisrpc call',
-    ['channel', 'method'],
-)
 redisrpc_duration = prometheus_client.Histogram(
     'redisrpc_duration', 'Duration of redisrpc call',
     ['method'],
-)
-redisrpc_channel_exception_duration = prometheus_client.Histogram(
-    'redisrpc_channel_exception_duration', 'Duration of redisrpc call',
-    ['channel', 'method', 'exception'],
 )
 redisrpc_exception_duration = prometheus_client.Histogram(
     'redisrpc_exception_duration', 'Duration of redisrpc call',
@@ -74,12 +66,21 @@ def random_string(size=8, chars=string.ascii_uppercase + string.digits):
 
 
 class curry:
-    '''Ref: https://jonathanharrington.wordpress.com/2007/11/01/currying-and-python-a-practical-example/'''
+    '''functools.partial with proper repr()'''
 
-    def __init__(self, fun, *args, **kwargs):
-        self.fun = fun
+    def __init__(self, function, *args, **kwargs):
+        self.function = function
         self.pending = args[:]
         self.kwargs = kwargs.copy()
+
+    def __repr__(self):
+        args = []
+        if self.args:
+            args.append(repr(args))
+        if self.kwargs:
+            args.append(repr(kwargs))
+
+        return '<%s %s>' % (self.function.__name__, ' '.join(args))
 
     def __call__(self, *args, **kwargs):
         if kwargs and self.kwargs:
@@ -87,7 +88,7 @@ class curry:
             kw.update(kwargs)
         else:
             kw = kwargs or self.kwargs
-            return self.fun(*(self.pending + args), **kw)
+            return self.function(*(self.pending + args), **kw)
 
 
 class FunctionCall(dict):
@@ -373,18 +374,14 @@ class Client(RedisBase):
                 method=method_name,
                 exception=exception_name,
             )
-            redisrpc_exception_duration.labels(**labels).observe(
-                duration.total_seconds())
-            redisrpc_channel_exception_duration.labels(
-                channel=self.message_queue,
-                **labels).observe(duration.total_seconds())
+            redisrpc_exception_duration.labels(
+                method=method_name,
+                exception=exception_name,
+            ).observe( duration.total_seconds())
             raise exception
         else:
-            labels = dict(method=method_name)
-            redisrpc_duration.labels(**labels).observe(duration.total_seconds())
-            redisrpc_channel_duration.labels(
-                channel=self.message_queue,
-                **labels).observe(duration.total_seconds())
+            redisrpc_duration.labels(method=method_name).observe(
+                duration.total_seconds())
             return response
 
     def __getattr__(self, name):
