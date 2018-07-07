@@ -221,8 +221,8 @@ class Client(RedisBase):
 
         RedisBase.__init__(self, redis_args)
 
-    def has_subscribers(self, redis_server, queue):
-        subscribers = dict(redis_server.pubsub_numsub(queue))
+    def has_subscribers(self, queue):
+        subscribers = dict(self.redis_server.pubsub_numsub(queue))
         return int(subscribers.get(queue, 0)) != 0
 
     def call(self, method_name, *args, **kwargs):
