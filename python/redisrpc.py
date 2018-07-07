@@ -208,6 +208,7 @@ class Client(RedisBase):
             redis_args=None,
             timeout=60,
             transport='json'):
+        self.redis_server = None
         self.message_queue = message_queue
         self.timeout = timeout
 
@@ -220,6 +221,10 @@ class Client(RedisBase):
 
         RedisBase.__init__(self, redis_args)
 
+    def has_subscribers(self, redis_server, queue):
+        subscribers = dict(redis_server.pubsub_numsub(queue))
+        return int(subscribers.get(queue, 0)) != 0
+
     def call(self, method_name, *args, **kwargs):
         function_call = FunctionCall(method_name, args, kwargs)
         response_queue = self.message_queue + ':rpc:' + random_string()
@@ -229,11 +234,11 @@ class Client(RedisBase):
         )
         message = self.transport.dumps(rpc_request)
         logger.debug('RPC Request: %s' % message)
-        redis_server = self.get_redis_server()
+        if not self.redis_server:
+            redis_server = self.get_redis_server()
 
         message_queue = self.message_queue + ':server'
-        subscribers = dict(redis_server.pubsub_numsub(message_queue))
-        if int(subscribers.get(message_queue, 0)) == 0:
+        if not self.has_subscribers(message_queue):
             raise NoServerAvailableException(
                 'No servers available for queue %s' % message_queue,
                 subscribers)
@@ -241,19 +246,15 @@ class Client(RedisBase):
         pubsub = self.get_pubsub()
         pubsub.subscribe(response_queue)
         start = datetime.now()
-        redis_server.publish(message_queue, message)
+        self.redis_server.publish(message_queue, message)
 
-        while pubsub.subscribed:
-            if self.timeout:
-                message = pubsub.parse_response(
-                    block=False, timeout=self.timeout)
-            else:
-                message = pubsub.parse_response(block=True)
+        message = None
+        # Default to actual timeout
+        for i in range(self.timeout or 60):
+            message = pubsub.parse_response(block=False, timeout=1)
 
             if message is None:
-                raise TimeoutException(
-                    'No response within %s seconds while waiting for %r' % (
-                        self.timeout, rpc_request))
+                continue
 
             message = pubsub.handle_message(message)
             if message and message['type'] == 'message':
@@ -262,6 +263,11 @@ class Client(RedisBase):
                 pubsub.unsubscribe(response_queue)
                 pubsub.close()
                 break
+
+            if not self.has_subscribers(message_queue):
+                raise ServerDiedException(
+                    'Server died after waiting %s seconds for %r' % (
+                        i, rpc_request))
         else:
             raise TimeoutException(
                 'No response within %s seconds while waiting for %r' % (
@@ -483,4 +489,8 @@ class TimeoutException(Exception):
 
 
 class NoServerAvailableException(Exception):
+    pass
+
+
+class ServerDiedException(Exception):
     pass
