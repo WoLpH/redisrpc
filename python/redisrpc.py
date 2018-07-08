@@ -75,10 +75,10 @@ class curry:
 
     def __repr__(self):
         args = []
-        if self.args:
-            args.append(repr(args))
+        if self.pending:
+            args.append(repr(self.pending))
         if self.kwargs:
-            args.append(repr(kwargs))
+            args.append(repr(self.kwargs))
 
         return '<%s %s>' % (self.function.__name__, ' '.join(args))
 
