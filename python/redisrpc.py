@@ -285,11 +285,11 @@ class Client(RedisBase):
             if not self.has_subscribers(message_queue):
                 raise ServerDiedException(
                     'Server died after waiting %s seconds for %r' % (
-                        i, rpc_request))
+                        i, method_name), rpc_request)
         else:
             raise TimeoutException(
                 'No response within %s seconds while waiting for %r' % (
-                    self.timeout, self.rpc_request))
+                    self.timeout, method_name), rpc_request)
 
         assert response['channel'] == response_queue
 
