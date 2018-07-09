@@ -192,7 +192,7 @@ class RedisBase(object):
         logger.debug('RPC Redis args: %s', self.redis_args)
 
         self.pubsub = None
-        self.redis_server = None
+        self._redis_server = None
         self.redis_pubsub_server = None
 
     def __del__(self):
@@ -200,7 +200,7 @@ class RedisBase(object):
             self.pubsub.close()
 
         self.pubsub = None
-        self.redis_server = None
+        self._redis_server = None
         self.redis_pubsub_server = None
 
     def get_pubsub(self):
@@ -216,6 +216,8 @@ class RedisBase(object):
             self.redis_server = redis.StrictRedis(**self.redis_args)
 
         return self.redis_server
+
+    redis_server = property(get_redis_server)
 
 
 class Client(RedisBase):
@@ -253,8 +255,6 @@ class Client(RedisBase):
         )
         message = self.transport.dumps(rpc_request)
         logger.debug('RPC Request: %s' % message)
-        if not self.redis_server:
-            redis_server = self.get_redis_server()
 
         message_queue = self.message_queue + ':server'
         if not self.has_subscribers(message_queue):
@@ -400,7 +400,7 @@ class Server(RedisBase):
     def run(self):
         subscriptions = self.local_objects.keys()
         subscriptions = [s + ':server' for s in subscriptions]
-        for channel, subscribers in self.get_redis_server().pubsub_numsub(
+        for channel, subscribers in self.redis_server.pubsub_numsub(
                 subscriptions):
             assert not subscribers, 'Someone is already subscribed to %r' % (
                 subscribers)
@@ -439,7 +439,7 @@ class Server(RedisBase):
             message = transport.dumps(rpc_response)
             logger.debug('RPC Response: %s' % message)
 
-            self.get_redis_server().publish(response_queue, message)
+            self.redis_server.publish(response_queue, message)
 
 
 def native(value):
@@ -503,7 +503,11 @@ class Response(FromNameMixin):
     classes = default_classes.copy()
 
 
-class RemoteException(FromNameMixin, Exception):
+class RedisRPCException(Exception):
+    pass
+
+
+class RemoteException(FromNameMixin, RedisRPCException):
     '''Raised by an RPC client when an exception occurs on the RPC server.'''
     classes = default_classes.copy()
 
@@ -513,14 +517,18 @@ class RemoteException(FromNameMixin, Exception):
         FromNameMixin.__init__(self)
 
 
-class TimeoutException(Exception):
+class LocalException(RedisRPCException):
+    pass
+
+
+class TimeoutException(LocalException):
     '''Raised by an RPC client when a timeout occurs.'''
     pass
 
 
-class NoServerAvailableException(Exception):
+class NoServerAvailableException(LocalException):
     pass
 
 
-class ServerDiedException(Exception):
+class ServerDiedException(LocalException):
     pass
