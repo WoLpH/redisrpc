@@ -84,11 +84,11 @@ class Server {
      * Starts the server.
      */
     public function run() {
+        $redis_server = new Predis\Client($this->redis_args);
         $this->redis_pubsub_server = new Predis\Client($this->redis_args);
         $this->pubsub = $this->redis_pubsub_server->pubSubLoop();
 
         $started = 0;
-        $redis_server = new Predis\Client($this->redis_args);
         foreach($this->local_objects as $key => $local_object){
             $message_queue = $key . ':server';
             $subscribers = $redis_server->pubsub('numsub', $message_queue);
@@ -99,7 +99,6 @@ class Server {
                 $started++;
             }
         }
-        unset($redis_server);
         if($started == 0){
             throw new \RuntimeException('Server already running for queues' .
                 implode(', ', array_keys($this->local_objects)));
@@ -115,11 +114,12 @@ class Server {
                 continue;
             }
 
-            $this->run_message($message);
+            $this->run_message($redis_server, $message);
         }
+        unset($redis_server);
     }
 
-    public function run_message($message){
+    public function run_message($redis_server, $message){
         // assert($message->channel == $this->message_queue);
         $message_queue = substr($message->channel, 0, -7);
         $local_object = $this->local_objects[$message_queue];
@@ -168,9 +168,7 @@ class Server {
         $message = json_encode($rpc_response);
 
         debug_print("RPC Response: $message");
-        $redis_server = new Predis\Client($this->redis_args);
         $redis_server->publish($response_queue, $message);
-        unset($redis_server);
         gc_collect_cycles();
     }
 }
