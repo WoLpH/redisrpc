@@ -229,7 +229,7 @@ class Client(RedisBase):
             redis_args=None,
             timeout=60,
             transport='json'):
-        self.redis_server = None
+        self._redis_server = None
         self.message_queue = message_queue
         self.timeout = timeout
 
