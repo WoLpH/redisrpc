@@ -370,14 +370,10 @@ class Client(RedisBase):
             exception.response = response
             logger.exception(repr(exception))
 
-            labels = dict(
-                method=method_name,
-                exception=exception_name,
-            )
             redisrpc_exception_duration.labels(
                 method=method_name,
                 exception=exception_name,
-            ).observe( duration.total_seconds())
+            ).observe(duration.total_seconds())
             raise exception
         else:
             redisrpc_duration.labels(method=method_name).observe(
