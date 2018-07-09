@@ -212,10 +212,10 @@ class RedisBase(object):
         return self.pubsub
 
     def get_redis_server(self):
-        if not self.redis_server:
-            self.redis_server = redis.StrictRedis(**self.redis_args)
+        if not self._redis_server:
+            self._redis_server = redis.StrictRedis(**self.redis_args)
 
-        return self.redis_server
+        return self._redis_server
 
     redis_server = property(get_redis_server)
 
