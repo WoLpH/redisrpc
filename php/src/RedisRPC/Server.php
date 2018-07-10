@@ -41,6 +41,7 @@ if (!function_exists("debug_print")) {
 class Server {
 
     private $pubsub;
+    private $redis_url;
     private $redis_args;
     private $redis_pubsub_server;
     private $local_objects;
@@ -48,19 +49,25 @@ class Server {
     /**
      * Initializes a new server.
      *
+     * @param mixed $redis_url Redis server arguments.
      * @param mixed $redis_args Redis server arguments.
      * @param mixed $local_object Handle to local wrapped objects as
      *        associative array (key = queue name) that will receive the RPC calls.
      */
-    public function __construct($redis_args, &$local_objects) {
+    public function __construct($redis_url, $redis_args, &$local_objects) {
         $this->pubsub = null;
+        $this->redis_url = $redis_url;
         $this->redis_args = $redis_args;
+        $this->redis_server = new Predis\Client($this->redis_url, $this->redis_args);
         $this->redis_pubsub_server = null;
         $this->local_objects = &$local_objects;
     }
 
     public function __destruct(){
         unset($this->pubsub);
+        if($this->redis_server){
+            $this->redis_server->disconnect();
+        }
         if($this->redis_pubsub_server){
             $this->redis_pubsub_server->disconnect();
         }
@@ -84,14 +91,13 @@ class Server {
      * Starts the server.
      */
     public function run() {
-        $redis_server = new Predis\Client($this->redis_args);
-        $this->redis_pubsub_server = new Predis\Client($this->redis_args);
+        $this->redis_pubsub_server = new Predis\Client($this->redis_url, $this->redis_args);
         $this->pubsub = $this->redis_pubsub_server->pubSubLoop();
 
         $started = 0;
         foreach($this->local_objects as $key => $local_object){
             $message_queue = $key . ':server';
-            $subscribers = $redis_server->pubsub('numsub', $message_queue);
+            $subscribers = $this->redis_server->pubsub('numsub', $message_queue);
             if($subscribers[$message_queue] != 0){
                 echo 'Server already running for ' . $message_queue . PHP_EOL;
             }else{
@@ -114,9 +120,8 @@ class Server {
                 continue;
             }
 
-            $this->run_message($redis_server, $message);
+            $this->run_message($this->redis_server, $message);
         }
-        unset($redis_server);
     }
 
     public function run_message($redis_server, $message){
