@@ -54,13 +54,14 @@ class Server {
      * @param mixed $local_object Handle to local wrapped objects as
      *        associative array (key = queue name) that will receive the RPC calls.
      */
-    public function __construct($redis_url, $redis_args, &$local_objects) {
+    public function __construct($redis_url, $redis_args) {
         $this->pubsub = null;
         $this->redis_url = $redis_url;
         $this->redis_args = $redis_args;
         $this->redis_server = new Predis\Client($this->redis_url, $this->redis_args);
-        $this->redis_pubsub_server = null;
-        $this->local_objects = &$local_objects;
+        $this->redis_pubsub_server = new Predis\Client($this->redis_url, $this->redis_args);
+        $this->pubsub = $this->redis_pubsub_server->pubSubLoop();
+        $this->local_objects = array();
     }
 
     public function __destruct(){
@@ -74,6 +75,14 @@ class Server {
     }
 
     public function add_local_object($key, $value){
+        $message_queue = $key . ':server';
+        $subscribers = $this->redis_server->pubsub('numsub', $message_queue);
+        if($subscribers[$message_queue] != 0){
+            $message = 'Server already running for ' . $message_queue . PHP_EOL;
+            echo $message;
+            return $message;
+        }
+
         $this->local_objects[$key] = $value;
         $this->pubsub->subscribe($key . ':server');
     }
@@ -91,25 +100,6 @@ class Server {
      * Starts the server.
      */
     public function run() {
-        $this->redis_pubsub_server = new Predis\Client($this->redis_url, $this->redis_args);
-        $this->pubsub = $this->redis_pubsub_server->pubSubLoop();
-
-        $started = 0;
-        foreach($this->local_objects as $key => $local_object){
-            $message_queue = $key . ':server';
-            $subscribers = $this->redis_server->pubsub('numsub', $message_queue);
-            if($subscribers[$message_queue] != 0){
-                echo 'Server already running for ' . $message_queue . PHP_EOL;
-            }else{
-                $this->pubsub->subscribe($message_queue);
-                $started++;
-            }
-        }
-        if($started == 0){
-            throw new \RuntimeException('Server already running for queues' .
-                implode(', ', array_keys($this->local_objects)));
-        }
-
         foreach($this->pubsub as $message){
             # Pop a message from the queue.
             # Decode the message.
@@ -120,11 +110,11 @@ class Server {
                 continue;
             }
 
-            $this->run_message($this->redis_server, $message);
+            $this->run_message($message);
         }
     }
 
-    public function run_message($redis_server, $message){
+    public function run_message($message){
         // assert($message->channel == $this->message_queue);
         $message_queue = substr($message->channel, 0, -7);
         $local_object = $this->local_objects[$message_queue];
@@ -173,7 +163,7 @@ class Server {
         $message = json_encode($rpc_response);
 
         debug_print("RPC Response: $message");
-        $redis_server->publish($response_queue, $message);
+        $this->redis_server->publish($response_queue, $message);
         gc_collect_cycles();
     }
 }
