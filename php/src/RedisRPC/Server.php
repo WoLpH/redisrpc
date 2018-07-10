@@ -58,10 +58,18 @@ class Server {
         $this->pubsub = null;
         $this->redis_url = $redis_url;
         $this->redis_args = $redis_args;
+        $this->local_objects = array();
+        $this->connect();
+    }
+
+    public function connect(){
         $this->redis_server = new Predis\Client($this->redis_url, $this->redis_args);
         $this->redis_pubsub_server = new Predis\Client($this->redis_url, $this->redis_args);
         $this->pubsub = $this->redis_pubsub_server->pubSubLoop();
-        $this->local_objects = array();
+
+        foreach($this->local_objects as $key => $value){
+            $this->pubsub->subscribe($key . ':server');
+        }
     }
 
     public function __destruct(){
@@ -100,17 +108,23 @@ class Server {
      * Starts the server.
      */
     public function run() {
-        foreach($this->pubsub as $message){
-            # Pop a message from the queue.
-            # Decode the message.
-            # Check that the function exists.
-            if($message->kind != 'message'){
-                # debug_print('Ignoring ' . $message->kind . ': ' .
-                #     $message->payload);
-                continue;
-            }
+        try{
+            foreach($this->pubsub as $message){
+                # Pop a message from the queue.
+                # Decode the message.
+                # Check that the function exists.
+                if($message->kind != 'message'){
+                    # debug_print('Ignoring ' . $message->kind . ': ' .
+                    #     $message->payload);
+                    continue;
+                }
 
-            $this->run_message($message);
+                $this->run_message($message);
+            }
+        }catch(\Predis\CommunicationException $e){
+            echo "Redis disconnected: $e, reconnecting";
+            echo $e->getTraceAsString();
+            return $this->run();
         }
     }
 
