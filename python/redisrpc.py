@@ -424,54 +424,91 @@ class Client(RedisBase):
 class Server(RedisBase):
     '''Executes function calls received from a Redis queue.'''
 
-    def __init__(self, local_objects, redis_args=None):
+    def __init__(self, local_objects=None, redis_args=None):
+        if local_objects is None:
+            local_objects = dict()
         self.local_objects = local_objects
 
         RedisBase.__init__(self, redis_args)
 
+    def add_local_object(self, *args, **kwargs):
+        if args:
+            kwargs[args[0]] = args[1]
+
+        for key, value in kwargs.items():
+            queue = key + ':server'
+            channel, subscribers = self.redis_server.pubsub_numsub(queue)[0]
+            assert not subscribers, 'Someone is already subscribed to %r' % \
+                channel
+
+            self.local_objects[key] = value
+            self.pubsub.subscribe(queue)
+
     def run(self):
-        subscriptions = self.local_objects.keys()
-        subscriptions = [s + ':server' for s in subscriptions]
-        for channel, subscribers in self.redis_server.pubsub_numsub(
-                subscriptions):
-            assert not subscribers, 'Someone is already subscribed to %r' % (
-                subscribers)
-
-        # Flush the message queue.
         pubsub = self.get_pubsub()
-        pubsub.subscribe(subscriptions)
 
+        for key, value in self.local_objects.items():
+            self.add_local_object(key, value)
+
+        self.loop(pubsub)
+
+    def loop(self, pubsub):
         for message in pubsub.listen():
             if message['type'] != 'message':
                 continue
 
-            logger.debug('RPC Request: %s' % message['data'])
-            transport, rpc_request = decode_message(message['data'])
-            response_queue = rpc_request['response_queue']
+            worker_name = message['channel'][:-7]
+            self.execute(worker_name, message)
 
-            function_call = FunctionCall.from_dict(
-                rpc_request['function_call'])
-            try:
-                message_queue = message['channel'][:-7]
-                local_object = self.local_objects[message_queue]
-                method = getattr(local_object, function_call['name'])
-                response = method(
-                    *function_call['args'],
-                    **function_call['kwargs'])
+    def execute(self, worker_name, message):
+        logger.debug('RPC Request: %s', message['data'])
+        transport, rpc_request = decode_message(message['data'])
+        response_queue = rpc_request['response_queue']
 
-                rpc_response = dict(
-                    return_type=type(response).__name__,
-                    return_value=response,
-                )
-            except Exception as e:
-                rpc_response = dict(
-                    exception=str(e),
-                    exception_type=type(e).__name__,
-                )
-            message = transport.dumps(rpc_response)
-            logger.debug('RPC Response: %s' % message)
+        function_call = FunctionCall.from_dict(rpc_request['function_call'])
+        try:
+            local_object = self.local_objects[worker_name]
+            method = getattr(local_object, function_call['name'])
+            response = method(
+                *function_call['args'],
+                **function_call['kwargs'])
 
-            self.redis_server.publish(response_queue, message)
+            type_ = type(response).__name__
+            type_ = reverse_classes.get(type_, type_)
+            rpc_response = dict(
+                return_type=type_,
+                return_value=response,
+            )
+        except Exception as e:
+            logger.exception('Error while executing %r: %r', function_call, e)
+            rpc_response = dict(
+                exception=str(e),
+                exception_type=type(e).__name__,
+            )
+        message = transport.dumps(rpc_response)
+        logger.debug('RPC Response: %s', message)
+
+        self.redis_server.publish(response_queue, message)
+
+
+class AsyncServer(Server):
+
+    def loop(self, pubsub):
+        import asyncio
+        from concurrent import futures
+        self.event_loop = loop = asyncio.get_event_loop()
+
+        self.executor = futures.ThreadPoolExecutor(128)
+
+        loop.run_until_complete(Server.loop(self, pubsub))
+
+    def execute(self, worker_name, message):
+        if worker_name == 'manager':
+            Server.execute(self, worker_name, message)
+        else:
+            import asyncio
+            asyncio.ensure_future(self.event_loop.run_in_executor(
+                self.executor, Server.execute, self, worker_name, message))
 
 
 def native(value):
