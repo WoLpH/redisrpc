@@ -22,6 +22,7 @@ import pickle
 import random
 import string
 import logging
+import datetime
 import functools
 import traceback
 import collections
@@ -40,6 +41,38 @@ __all__ = [
 def json_default(value):
     if isinstance(value, FromNameMixin):
         return value.__dict__
+    elif isinstance(value, logging.Logger):
+        return value.name
+    elif isinstance(value, datetime.datetime):
+        return value.isoformat()
+    elif isinstance(value, datetime.timedelta):
+        return str(value)
+    elif isinstance(value, Response):
+        return value.__dict__
+    elif isinstance(value, RemoteException):
+        return value.__dict__
+    elif hasattr(value, 'info') and hasattr(value, 'id'):
+        return dict(result=dict(id=value.id, info=value.info))
+
+    try:
+        import bson
+        if isinstance(value, bson.objectid.ObjectId):
+            return str(value)
+        elif isinstance(value, bson.timestamp.Timestamp):
+            return default(value.as_datetime())
+        elif isinstance(value, bson.binary.Binary):
+            return repr(value)
+    except ImportError:
+        pass
+
+    try:
+        import pymongo
+        if isinstance(value, pymongo.cursor.Cursor):
+            return list(value)
+    except ImportError:
+        pass
+
+    return json.JSONEncoder.default(value)
 
 
 logger = logging.getLogger(__name__)
@@ -143,8 +176,11 @@ def decode_message(message):
     '''Returns a (transport, decoded_message) pair.'''
     # Try JSON, then try Python pickle, then fail.
     try:
-        return JSONTransport.create(), json.loads(message.decode())
+        if hasattr(message, 'decode'):
+            message = message.decode()
+        return JSONTransport.create(), json.loads(message)
     except Exception:
+        raise
         pass
     return PickleTransport.create(), pickle.loads(message)
 
@@ -160,7 +196,7 @@ class JSONTransport(object):
         return cls._singleton
 
     def dumps(self, obj):
-        return json.dumps(obj)
+        return json.dumps(obj, default=json_default)
 
     def loads(self, obj):
         return json.loads(obj)
@@ -450,6 +486,12 @@ default_classes = {
     'tuple': tuple,
     'dict': dict,
     'OrderedDict': collections.OrderedDict,
+}
+reverse_classes = {
+    'NoneType': 'NULL',
+    'bool': 'boolean',
+    'str': 'string',
+    'OrderedDict': 'dict',
 }
 
 
