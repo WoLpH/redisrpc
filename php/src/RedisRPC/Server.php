@@ -43,7 +43,6 @@ class Server {
     private $pubsub;
     private $redis_url;
     private $redis_args;
-    private $redis_pubsub_server;
     private $local_objects;
 
     /**
@@ -60,80 +59,104 @@ class Server {
         $this->redis_args = $redis_args;
         $this->local_objects = array();
         $this->connect();
+
+        $this->last_update = 0;
+        $this->queue_keys = array();
+        $this->activity_keys = array();
     }
 
     public function connect(){
         $this->redis_server = new Predis\Client($this->redis_url, $this->redis_args);
-        $this->redis_pubsub_server = new Predis\Client($this->redis_url, $this->redis_args);
-        $this->pubsub = $this->redis_pubsub_server->pubSubLoop();
-
-        foreach($this->local_objects as $key => $value){
-            $this->pubsub->subscribe($key . ':server');
-        }
     }
 
-    public function __destruct(){
-        unset($this->pubsub);
-        if($this->redis_server){
-            $this->redis_server->disconnect();
-        }
-        if($this->redis_pubsub_server){
-            $this->redis_pubsub_server->disconnect();
-        }
+    public function get_running_key($queue){
+        return $queue . ':running';
+    }
+
+    public function get_queue_key($queue){
+        return $queue . ':queue';
+    }
+
+    public function get_activity_key($queue){
+        return $queue . ':activity';
+    }
+
+    public function get_rpc_key($queue){
+        return $queue . ':rpc';
     }
 
     public function add_local_object($key, $value){
-        $message_queue = $key . ':server';
-        $subscribers = $this->redis_server->pubsub('numsub', $message_queue);
-        if($subscribers[$message_queue] != 0){
-            $message = 'Server already running for ' . $message_queue . PHP_EOL;
-            echo $message;
-            return $message;
-        }
-
+        $queue = $this->get_queue_key($key);
         $this->local_objects[$key] = $value;
-        $this->pubsub->subscribe($key . ':server');
+        $this->update_keys();
+    }
+
+    public function update_keys(){
+        $this->queue_keys = array();
+        $this->activity_keys = array();
+        foreach($this->local_objects as $key => $value){
+            $this->queue_keys[] = $this->get_queue_key($key);
+            $this->activity_keys[] = $this->get_activity_key($key);
+        }
     }
 
     public function remove_local_object($key){
-        $this->pubsub->unsubscribe($key . ':server');
         unset($this->local_objects[$key]);
+        $this->update_keys();
     }
 
     public function get_local_objects(){
         return array_keys($this->local_objects);
     }
 
+    public function set_active(){
+        $now = time();
+
+        if($now - $this->last_update > 5){
+            $this->last_update = $now;
+            $pipe = $this->redis_server->pipeline();
+            foreach($this->activity_keys as $key){
+                $pipe->setex($key, 65, $now);
+            }
+            $pipe->execute();
+        }
+    }
+
     /**
      * Starts the server.
      */
     public function run() {
+        $this->update_keys();
+        $this->set_active();
         try{
-            foreach($this->pubsub as $message){
-                # Pop a message from the queue.
-                # Decode the message.
-                # Check that the function exists.
-                if($message->kind != 'message'){
-                    # debug_print('Ignoring ' . $message->kind . ': ' .
-                    #     $message->payload);
-                    continue;
-                }
+            while(true){
+                list($name, $message) = $this->redis_server->blpop(
+                    $this->queue_keys, 5);
 
-                $this->run_message($message);
+                $this->set_active();
+
+                if(!empty($name)){
+                    $name = implode(':', explode(':', $name, -1));
+                    $this->run_message($name, $message);
+                }
             }
         }catch(\Predis\CommunicationException $e){
             echo "Redis disconnected: $e, reconnecting";
             echo $e->getTraceAsString();
             return $this->run();
-        }
+        }finally{
+            $pipe = $this->redis_server->pipeline();
+            foreach($this->activity_keys as $key){
+                $this->redis_server->del($key);
+            }
+            $pipe->execute();
+		}
     }
 
-    public function run_message($message){
-        // assert($message->channel == $this->message_queue);
-        $message_queue = substr($message->channel, 0, -7);
-        $local_object = $this->local_objects[$message_queue];
+    public function run_message($name, $message){
+        $local_object = $this->local_objects[$name];
 
-        $rpc_request = json_decode($message->payload);
+        $rpc_request = json_decode($message);
         $response_queue = $rpc_request->response_queue;
         $function_call = FunctionCall::from_object(
             $rpc_request->function_call);
@@ -177,7 +200,10 @@ class Server {
         $message = json_encode($rpc_response);
 
         debug_print("RPC Response: $message");
-        $this->redis_server->publish($response_queue, $message);
+        $pipe = $this->redis_server->pipeline();
+        $this->redis_server->lpush($response_queue, $message);
+        $this->redis_server->expire($response_queue, 300);
+        $pipe->execute();
         gc_collect_cycles();
     }
 }

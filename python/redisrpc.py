@@ -21,13 +21,15 @@ import pprint
 import pickle
 import random
 import string
+import timeit
 import logging
-import datetime
+import threading
 import functools
 import traceback
 import collections
 import prometheus_client
 from datetime import datetime
+from datetime import timedelta
 
 
 __all__ = [
@@ -43,9 +45,9 @@ def json_default(value):
         return value.__dict__
     elif isinstance(value, logging.Logger):
         return value.name
-    elif isinstance(value, datetime.datetime):
+    elif isinstance(value, datetime):
         return value.isoformat()
-    elif isinstance(value, datetime.timedelta):
+    elif isinstance(value, timedelta):
         return str(value)
     elif isinstance(value, Response):
         return value.__dict__
@@ -72,8 +74,6 @@ def json_default(value):
     except ImportError:
         pass
 
-    return json.JSONEncoder.default(value)
-
 
 logger = logging.getLogger(__name__)
 redisrpc_duration = prometheus_client.Histogram(
@@ -85,12 +85,64 @@ redisrpc_exception_duration = prometheus_client.Histogram(
     ['method', 'exception'],
 )
 
+TIMEOUT = 60
+SLEEP = 5
+RESULTS_EXPIRE = 300
+
 
 if sys.version_info.major == 2:
     range = xrange  # NOQA
 else:
     unicode = str
     basestring = str, bytes
+
+
+def truncated_repr(response):
+    response_repr = dict()
+    repr_keys = set(('return_value', 'response', 'exception'))
+    for k, v in response.items():
+        if isinstance(v, (list, set)) and v:
+            if len(v) > 10:
+                vs = v[:5] + ['...'] + v[-5:]
+            else:
+                vs = v
+
+            for i, v in enumerate(vs):
+                v = repr(v)
+                if len(v) > 100:
+                    v = v[:50] + '...' + v[-50:]
+
+                vs[i] = v
+
+            k += '_repr'
+            v = repr(vs)
+
+        elif isinstance(v, dict) and v:
+            ks = sorted(v)
+            if len(ks) > 10:
+                ks = ks[:5] + ['...'] + ks[-5:]
+
+            vs = {k2: v.get(k2, '...') for k2 in ks}
+            for k2, v in vs.items():
+                v = repr(v)
+
+                if len(v) > 100:
+                    v = v[:50] + '...' + v[-50:]
+
+                vs[k2] = v
+
+            k += '_repr'
+            v = repr(vs)
+
+        elif k in repr_keys and v:
+            v_repr = repr(v)
+            k += '_repr'
+            if len(v_repr) > 100:
+                v_repr = v_repr[:50] + '...' + v_repr[-50:]
+
+        response_repr[k] = v
+
+    return response_repr
 
 
 def random_string(size=8, chars=string.ascii_uppercase + string.digits):
@@ -225,33 +277,34 @@ class RedisBase(object):
     def __init__(self, redis_args=None):
         self.redis_args = redis_args or dict()
         self.redis_args['decode_responses'] = True
-        logger.debug('RPC Redis args: %s', self.redis_args)
+        logger.debug('RPC Redis args: %s' % self.redis_args)
 
-        self.pubsub = None
         self._redis_server = None
-        self.redis_pubsub_server = None
 
     def __del__(self):
-        if self.pubsub:
-            self.pubsub.close()
-
-        self.pubsub = None
         self._redis_server = None
-        self.redis_pubsub_server = None
-
-    def get_pubsub(self):
-        if not self.pubsub:
-            self.redis_pubsub_server = redis.StrictRedis(**self.redis_args)
-            self.pubsub = self.redis_pubsub_server.pubsub(
-                ignore_subscribe_messages=True)
-
-        return self.pubsub
 
     def get_redis_server(self):
         if not self._redis_server:
             self._redis_server = redis.StrictRedis(**self.redis_args)
 
         return self._redis_server
+
+    @classmethod
+    def get_running_key(cls, queue):
+        return '%s:running' % queue
+
+    @classmethod
+    def get_queue_key(cls, queue):
+        return '%s:queue' % queue
+
+    @classmethod
+    def get_activity_key(cls, queue):
+        return '%s:activity' % queue
+
+    @classmethod
+    def get_rpc_key(cls, queue):
+        return '%s:rpc:%s' % (queue, random_string())
 
     redis_server = property(get_redis_server)
 
@@ -261,12 +314,12 @@ class Client(RedisBase):
 
     def __init__(
             self,
-            message_queue,
+            name,
             redis_args=None,
-            timeout=60,
+            timeout=TIMEOUT,
             transport='json'):
         self._redis_server = None
-        self.message_queue = message_queue
+        self.name = name
         self.timeout = timeout
 
         if transport == 'json':
@@ -279,12 +332,11 @@ class Client(RedisBase):
         RedisBase.__init__(self, redis_args)
 
     def has_subscribers(self, queue):
-        subscribers = dict(self.redis_server.pubsub_numsub(queue))
-        return int(subscribers.get(queue, 0)) != 0
+        return self.redis_server.exists(self.get_activity_key(queue))
 
     def call(self, method_name, *args, **kwargs):
         function_call = FunctionCall(method_name, args, kwargs)
-        response_queue = self.message_queue + ':rpc:' + random_string()
+        response_queue = self.get_rpc_key(self.name)
         rpc_request = dict(
             function_call=function_call,
             response_queue=response_queue,
@@ -292,90 +344,32 @@ class Client(RedisBase):
         message = self.transport.dumps(rpc_request)
         logger.debug('RPC Request: %s' % message)
 
-        message_queue = self.message_queue + ':server'
-        if not self.has_subscribers(message_queue):
+        if not self.has_subscribers(self.name):
             raise NoServerAvailableException(
-                'No servers available for queue %s' % message_queue)
+                'No servers available for queue %s' % self.name)
 
-        pubsub = self.get_pubsub()
-        pubsub.subscribe(response_queue)
         start = datetime.now()
-        self.redis_server.publish(message_queue, message)
+        queue_key = self.get_queue_key(self.name)
+        queue_length = self.redis_server.lpush(queue_key, message)
 
-        message = None
-        # Default to actual timeout
-        for i in range(self.timeout or 60):
-            message = pubsub.parse_response(block=False, timeout=1)
-
-            if message is None:
-                continue
-
-            message = pubsub.handle_message(message)
-            if message and message['type'] == 'message':
-                assert message['channel'] == response_queue
-                response = message
-                pubsub.unsubscribe(response_queue)
-                pubsub.close()
-                break
-
-            if not self.has_subscribers(message_queue):
+        response = self.redis_server.brpop(response_queue, timeout=self.timeout)
+        if response is None:
+            if self.has_subscribers(queue_key):
+                raise TimeoutException(
+                    'No response within %s seconds while waiting for %r' % (
+                        self.timeout, method_name), rpc_request)
+            else:
                 raise ServerDiedException(
                     'Server died after waiting %s seconds for %r' % (
                         i, method_name), rpc_request)
         else:
-            raise TimeoutException(
-                'No response within %s seconds while waiting for %r' % (
-                    self.timeout, method_name), rpc_request)
+            response = response[1]
 
-        assert response['channel'] == response_queue
+        logger.debug('RPC Response: %s' % response)
 
-        logger.debug('RPC Response: %s', response['data'])
+        rpc_response = self.transport.loads(response)
 
-        rpc_response = self.transport.loads(response['data'])
-
-        response_repr = dict()
-        repr_keys = set(('return_value', 'response', 'exception'))
-        for k, v in rpc_response.items():
-            if isinstance(v, (list, set)) and v:
-                if len(v) > 10:
-                    vs = v[:5] + ['...'] + v[-5:]
-                else:
-                    vs = v
-
-                for i, v in enumerate(vs):
-                    v = repr(v)
-                    if len(v) > 100:
-                        v = v[:50] + '...' + v[-50:]
-
-                    vs[i] = v
-
-                k += '_repr'
-                v = repr(vs)
-
-            elif isinstance(v, dict) and v:
-                ks = sorted(v)
-                if len(ks) > 10:
-                    ks = ks[:5] + ['...'] + ks[-5:]
-
-                vs = {k2: v.get(k2, '...') for k2 in ks}
-                for k2, v in vs.items():
-                    v = repr(v)
-
-                    if len(v) > 100:
-                        v = v[:50] + '...' + v[-50:]
-
-                    vs[k2] = v
-
-                k += '_repr'
-                v = repr(vs)
-
-            elif k in repr_keys and v:
-                v_repr = repr(v)
-                k += '_repr'
-                if len(v_repr) > 100:
-                    v_repr = v_repr[:50] + '...' + v_repr[-50:]
-
-            response_repr[k] = v
+        response_repr = truncated_repr(rpc_response)
 
         duration = datetime.now() - start
         response_repr['duration'] = str(duration)
@@ -428,6 +422,9 @@ class Server(RedisBase):
         if local_objects is None:
             local_objects = dict()
         self.local_objects = local_objects
+        self.last_update = 0
+        self.queue_keys = []
+        self.activity_keys = []
 
         RedisBase.__init__(self, redis_args)
 
@@ -436,71 +433,110 @@ class Server(RedisBase):
             kwargs[args[0]] = args[1]
 
         for key, value in kwargs.items():
-            queue = key + ':server'
-            channel, subscribers = self.redis_server.pubsub_numsub(queue)[0]
-            assert not subscribers, 'Someone is already subscribed to %r' % \
-                channel
+            # queue = self.queue_key(key)
+            # channel, subscribers = self.redis_server.pubsub_numsub(queue)[0]
+            # assert not subscribers, 'Someone is already subscribed to %r' % \
+            #     channel
 
             self.local_objects[key] = value
-            self.pubsub.subscribe(queue)
+            # self.pubsub.subscribe(queue)
+
+        self.queue_keys = [self.get_queue_key(key)
+                           for key in self.local_objects]
+        self.activity_keys = [self.get_activity_key(key)
+                              for key in self.local_objects]
+
+    def set_active(self):
+        now = timeit.default_timer()
+        if now - self.last_update < SLEEP:
+            return
+
+        with self.redis_server.pipeline() as pipe:
+            for key in self.activity_keys:
+                # Add 5 seconds margin to be safe
+                pipe.setex(key, TIMEOUT + SLEEP + 5, now)
+
+            pipe.execute()
+        self.last_update = now
 
     def run(self):
-        pubsub = self.get_pubsub()
+        # Initialize everything and start the loop
+        self.add_local_object()
+        self.set_active()
+        try:
+            self.loop()
+        finally:
+            self.redis_server.delete(*self.activity_keys)
 
-        for key, value in self.local_objects.items():
-            self.add_local_object(key, value)
+    def loop(self):
+        while True:
+            message = self.redis_server.brpop(self.queue_keys, timeout=SLEEP)
+            self.set_active()
 
-        self.loop(pubsub)
+            if message is not None:
+                name, message = message
+                name = name.rsplit(':', 1)[0]
+                self.execute(name, message)
 
-    def loop(self, pubsub):
-        for message in pubsub.listen():
-            if message['type'] != 'message':
-                continue
+    @classmethod
+    def get_type_name(cls, object_):
+        type_ = type(object_).__name__
+        type_ = reverse_classes.get(type_, type_)
+        return type_
 
-            worker_name = message['channel'][:-7]
-            self.execute(worker_name, message)
-
-    def execute(self, worker_name, message):
-        logger.debug('RPC Request: %s', message['data'])
-        transport, rpc_request = decode_message(message['data'])
+    def execute(self, name, message):
+        logger.debug('RPC Request: %s' % message)
+        transport, rpc_request = decode_message(message)
         response_queue = rpc_request['response_queue']
 
         function_call = FunctionCall.from_dict(rpc_request['function_call'])
-        try:
-            local_object = self.local_objects[worker_name]
-            method = getattr(local_object, function_call['name'])
-            response = method(
-                *function_call['args'],
-                **function_call['kwargs'])
+        start = datetime.now()
 
-            type_ = type(response).__name__
-            type_ = reverse_classes.get(type_, type_)
+        try:
+            local_object = self.local_objects[name]
+            method = getattr(local_object, function_call['name'])
+            with redisrpc_duration.labels(method=function_call['name']).time():
+                response = method(
+                    *function_call['args'],
+                    **function_call['kwargs'])
+
             rpc_response = dict(
-                return_type=type_,
+                return_type=self.get_type_name(response),
                 return_value=response,
             )
+            log = logger.info
         except Exception as e:
-            logger.exception('Error while executing %r: %r', function_call, e)
+            log = logger.error
+            logger.exception('Error while executing %r: %r' % (
+                function_call, e))
             rpc_response = dict(
                 exception=str(e),
-                exception_type=type(e).__name__,
+                exception_type=self.get_type_name(e),
             )
+            duration = datetime.now() - start
+            redisrpc_exception_duration.labels(
+                method=function_call['name'],
+                exception=type(e).__name__,
+            ).observe(duration.total_seconds())
         message = transport.dumps(rpc_response)
-        logger.debug('RPC Response: %s', message)
+        log('RPC Response: %s' % message)
 
-        self.redis_server.publish(response_queue, message)
+        with self.redis_server.pipeline() as pipe:
+            pipe.lpush(response_queue, message)
+            pipe.expire(response_queue, RESULTS_EXPIRE)
+            pipe.execute()
 
 
 class AsyncServer(Server):
 
-    def loop(self, pubsub):
+    def loop(self):
         import asyncio
         from concurrent import futures
         self.event_loop = loop = asyncio.get_event_loop()
 
-        self.executor = futures.ThreadPoolExecutor(128)
+        self.executor = futures.ThreadPoolExecutor(256)
 
-        loop.run_until_complete(Server.loop(self, pubsub))
+        loop.run_until_complete(Server.loop(self))
 
     def execute(self, worker_name, message):
         if worker_name == 'manager':
