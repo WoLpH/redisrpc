@@ -352,18 +352,19 @@ class Client(RedisBase):
         queue_key = self.get_queue_key(self.name)
         queue_length = self.redis_server.lpush(queue_key, message)
 
-        response = self.redis_server.brpop(response_queue, timeout=self.timeout)
-        if response is None:
-            if self.has_subscribers(queue_key):
-                raise TimeoutException(
-                    'No response within %s seconds while waiting for %r' % (
-                        self.timeout, method_name), rpc_request)
-            else:
+        for i in range(self.timeout):
+            response = self.redis_server.brpop(response_queue, timeout=i)
+            if response:
+                response = response[1]
+                break
+            elif not self.has_subscribers(queue_key):
                 raise ServerDiedException(
                     'Server died after waiting %s seconds for %r' % (
                         i, method_name), rpc_request)
         else:
-            response = response[1]
+            raise TimeoutException(
+                'No response within %s seconds while waiting for %r' % (
+                    self.timeout, method_name), rpc_request)
 
         logger.debug('RPC Response: %s' % response)
 
