@@ -420,6 +420,7 @@ class Server(RedisBase):
     '''Executes function calls received from a Redis queue.'''
 
     def __init__(self, local_objects=None, redis_args=None):
+        self.replaced = False
         if local_objects is None:
             local_objects = dict()
         self.local_objects = local_objects
@@ -467,7 +468,8 @@ class Server(RedisBase):
         try:
             self.loop()
         finally:
-            self.redis_server.delete(*self.activity_keys)
+            if not self.replaced:
+                self.redis_server.delete(*self.activity_keys)
 
     def loop(self):
         while True:
