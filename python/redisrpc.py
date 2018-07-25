@@ -85,7 +85,7 @@ redisrpc_exception_duration = prometheus_client.Histogram(
     ['method', 'exception'],
 )
 
-TIMEOUT = 60
+TIMEOUT = 300
 SLEEP = 5
 RESULTS_EXPIRE = 300
 

@@ -116,7 +116,7 @@ class Server {
             $this->last_update = $now;
             $pipe = $this->redis_server->pipeline();
             foreach($this->activity_keys as $key){
-                $pipe->setex($key, 65, $now);
+                $pipe->setex($key, 300, $now);
             }
             $pipe->execute();
         }
