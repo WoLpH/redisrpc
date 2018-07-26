@@ -140,6 +140,8 @@ def truncated_repr(response):
             if len(v_repr) > 100:
                 v_repr = v_repr[:50] + '...' + v_repr[-50:]
 
+            v = v_repr
+
         response_repr[k] = v
 
     return response_repr
