@@ -521,6 +521,7 @@ class Server(RedisBase):
             rpc_response = dict(
                 exception=str(e),
                 exception_type=self.get_type_name(e),
+                exception_trace=traceback.format_exc(),
             )
             duration = datetime.now() - start
             redisrpc_exception_duration.labels(
