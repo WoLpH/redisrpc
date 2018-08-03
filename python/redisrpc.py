@@ -484,6 +484,11 @@ class Server(RedisBase):
 
             if message is not None:
                 name, message = message
+                # We were replaced, requeue the message
+                if self.replaced:
+                    self.redis_server.lpush(name, message)
+                    return
+
                 name = name.rsplit(':', 1)[0]
                 self.execute(name, message)
 
