@@ -12,25 +12,26 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-
 import sys
 import json
-import redis
 import pprint
 import pickle
+
+import aioredis
 import random
 import string
 import timeit
+import inspect
 import logging
-import threading
-import functools
+import asyncio
 import traceback
 import collections
 import prometheus_client
 from datetime import datetime
 from datetime import timedelta
 
+import redis
+import threading
 
 __all__ = [
     'Client',
@@ -38,6 +39,9 @@ __all__ = [
     'RemoteException',
     'TimeoutException'
 ]
+
+
+assert pprint
 
 
 def json_default(value):
@@ -55,13 +59,20 @@ def json_default(value):
         return value.__dict__
     elif hasattr(value, 'info') and hasattr(value, 'id'):
         return dict(result=dict(id=value.id, info=value.info))
+    elif hasattr(value, 'httpResponse'):
+        return value.httpResponse['data']
+    elif hasattr(value, '_response'):
+        return value.__dict__
+    elif hasattr(value, 'data'):
+        return value.__dict__
+
 
     try:
         import bson
         if isinstance(value, bson.objectid.ObjectId):
             return str(value)
         elif isinstance(value, bson.timestamp.Timestamp):
-            return default(value.as_datetime())
+            return json_default(value.as_datetime())
         elif isinstance(value, bson.binary.Binary):
             return repr(value)
     except ImportError:
@@ -86,22 +97,23 @@ redisrpc_exception_duration = prometheus_client.Histogram(
 )
 
 TIMEOUT = 300
-SLEEP = 5
+SLEEP = 15
 RESULTS_EXPIRE = 300
-
-
-if sys.version_info.major == 2:
-    range = xrange  # NOQA
-else:
-    unicode = str
-    basestring = str, bytes
 
 
 def truncated_repr(response):
     response_repr = dict()
     repr_keys = set(('return_value', 'response', 'exception'))
     for k, v in response.items():
-        if isinstance(v, (list, set)) and v:
+        if k in repr_keys and v:
+            v_repr = repr(v)
+            k += '_repr'
+            if len(v_repr) > 100:
+                v_repr = v_repr[:50] + '...' + v_repr[-50:]
+
+            v = v_repr
+
+        elif isinstance(v, (list, set)) and v:
             if len(v) > 10:
                 vs = v[:5] + ['...'] + v[-5:]
             else:
@@ -133,14 +145,6 @@ def truncated_repr(response):
 
             k += '_repr'
             v = repr(vs)
-
-        elif k in repr_keys and v:
-            v_repr = repr(v)
-            k += '_repr'
-            if len(v_repr) > 100:
-                v_repr = v_repr[:50] + '...' + v_repr[-50:]
-
-            v = v_repr
 
         response_repr[k] = v
 
@@ -201,7 +205,7 @@ class FunctionCall(dict):
         execute the function call.'''
         args = []
         for arg in self['args']:
-            if isinstance(arg, unicode) and sys.version_info.major == 2:
+            if isinstance(arg, str) and sys.version_info.major == 2:
                 arg = arg.encode('utf-8')
             else:
                 arg = str(arg)
@@ -276,21 +280,24 @@ class PickleTransport(object):
 
 class RedisBase(object):
 
-    def __init__(self, redis_args=None):
-        self.redis_args = redis_args or dict()
-        self.redis_args['decode_responses'] = True
-        logger.debug('RPC Redis args: %s' % self.redis_args)
+    def __init__(self, redis_pool: aioredis.ConnectionsPool=None, redis_name: str=None, redis_sentinel: aioredis.RedisSentinel=None):
+        self.redis_pool = redis_pool
+        self.redis_name = redis_name
+        self.redis_sentinel = redis_sentinel
 
-        self._redis_server = None
+        assert redis_pool or (redis_name and redis_sentinel), 'Need to specify either a redis pool or a sentinal'
 
-    def __del__(self):
-        self._redis_server = None
+    def get_redis_slave(self) -> aioredis.Redis:
+        if self.redis_pool:
+            return self.redis_pool
+        else:
+            return self.redis_sentinel.slave_for(self.redis_name)
 
-    def get_redis_server(self):
-        if not self._redis_server:
-            self._redis_server = redis.StrictRedis(**self.redis_args)
-
-        return self._redis_server
+    def get_redis_master(self) -> aioredis.Redis:
+        if self.redis_pool:
+            return self.redis_pool
+        else:
+            return self.redis_sentinel.master_for(self.redis_name)
 
     @classmethod
     def get_running_key(cls, queue):
@@ -308,7 +315,9 @@ class RedisBase(object):
     def get_rpc_key(cls, queue):
         return '%s:rpc:%s' % (queue, random_string())
 
-    redis_server = property(get_redis_server)
+    redis_slave = property(get_redis_slave)
+    redis_master = property(get_redis_master)
+    redis_server = property(get_redis_master)
 
 
 class Client(RedisBase):
@@ -317,10 +326,10 @@ class Client(RedisBase):
     def __init__(
             self,
             name,
-            redis_args=None,
+            redis_name,
+            redis_sentinel,
             timeout=TIMEOUT,
             transport='json'):
-        self._redis_server = None
         self.name = name
         self.timeout = timeout
 
@@ -331,10 +340,10 @@ class Client(RedisBase):
         else:
             raise Exception('invalid transport {0}'.format(transport))
 
-        RedisBase.__init__(self, redis_args)
+        RedisBase.__init__(self, redis_name=redis_name, redis_sentinel=redis_sentinel)
 
     def has_subscribers(self, queue):
-        return self.redis_server.exists(self.get_activity_key(queue))
+        return self.redis_slave.exists(self.get_activity_key(queue))
 
     def call(self, method_name, *args, **kwargs):
         function_call = FunctionCall(method_name, args, kwargs)
@@ -352,21 +361,21 @@ class Client(RedisBase):
 
         start = datetime.now()
         queue_key = self.get_queue_key(self.name)
-        self.redis_server.lpush(queue_key, message)
+        self.redis_master.lpush(queue_key, message)
 
         for i in range(self.timeout):
-            response = self.redis_server.brpop(response_queue, timeout=i)
+            response = self.redis_master.brpop(response_queue, timeout=i)
             if response:
                 response = response[1]
                 break
             elif not self.has_subscribers(queue_key):
-                self.redis_server.rpop(queue_key)
+                self.redis_master.rpop(queue_key)
 
                 raise ServerDiedException(
                     'Server died after waiting %s seconds for %r' % (
                         i, method_name), rpc_request)
         else:
-            self.redis_server.rpop(queue_key)
+            self.redis_master.rpop(queue_key)
 
             raise TimeoutException(
                 'No response within %s seconds while waiting for %r' % (
@@ -425,16 +434,18 @@ class Client(RedisBase):
 class Server(RedisBase):
     '''Executes function calls received from a Redis queue.'''
 
-    def __init__(self, local_objects=None, redis_args=None):
+    def __init__(self, redis_pool=None, redis_name=None, redis_sentinel=None, local_objects=None):
+        self.stopped = False
         self.replaced = False
         if local_objects is None:
             local_objects = dict()
         self.local_objects = local_objects
         self.last_update = 0
+        self.futures: list[asyncio.Future] = []
         self.queue_keys = []
         self.activity_keys = []
 
-        RedisBase.__init__(self, redis_args)
+        RedisBase.__init__(self, redis_pool=redis_pool, redis_name=redis_name, redis_sentinel=redis_sentinel)
 
     def add_local_object(self, *args, **kwargs):
         if args:
@@ -454,43 +465,93 @@ class Server(RedisBase):
         self.activity_keys = [self.get_activity_key(key)
                               for key in self.local_objects]
 
-    def set_active(self):
-        now = timeit.default_timer()
-        if now - self.last_update < SLEEP:
-            return
+    async def set_active(self, sleep=5):
+        while not self.stopped:
+            # if self.activity_keys[0] != 'manager':
+            #     thread_id = threading.get_ident()
+            #     redis_thread_id = await self.redis_slave.get(self.activity_keys[0])
+            #     if redis_thread_id and redis_thread_id != thread_id:
+            #         Some other worker is also servicing this user, that should not happen
+                    # self.replaced = True
+                    # self.stopped = True
+                    # logger.warning('Got unexpected thread id %r instead of %r for %r',
+                    #                redis_thread_id, thread_id, self.activity_keys)
+                    # break
 
-        with self.redis_server.pipeline() as pipe:
+            # with self.redis_server.pipeline() as pipe:
+            pipe = self.redis_master.pipeline()
+
+            now = timeit.default_timer()
+            self.last_update = now
+
             for key in self.activity_keys:
                 # Add 5 seconds margin to be safe
-                pipe.setex(key, TIMEOUT + SLEEP + 5, now)
+                pipe.setex(key, sleep + 5, now)
 
-            pipe.execute()
-        self.last_update = now
+            # asyncio.run_coroutine_threadsafe(
+            #     pipe.execute(),
+            #     self.redis_sentinel._pool._loop,
+            # )
+            await pipe.execute()
+            await asyncio.sleep(sleep)
 
-    def run(self):
+    async def run(self, loop):
         # Initialize everything and start the loop
         self.add_local_object()
-        self.set_active()
+        self.futures.append(asyncio.ensure_future(self.set_active(), loop=loop))
         try:
-            self.loop()
+            # asyncio.ensure_future(self.loop(loop), loop=loop)
+            # loop.run_forever()
+            await self.loop(loop)
         finally:
             if not self.replaced:
-                self.redis_server.delete(*self.activity_keys)
+                await self.redis_master.delete(*self.activity_keys)
+                self.stop()
+                await loop.shutdown_asyncgens()
 
-    def loop(self):
-        while True:
-            message = self.redis_server.brpop(self.queue_keys, timeout=SLEEP)
-            self.set_active()
+    def stop(self):
+        self.stopped = True
+        for future in self.futures:
+            future.cancel()
+
+    def drain(self):
+        # print('waiting for futures')
+        # done, not_done = futures.wait(
+        #     tuple(self.futures),
+        #     timeout=0.1,
+        #     return_when=futures.FIRST_COMPLETED)
+        #
+        # print('got', done, not_done)
+        # for future in done:
+        #     logger.info(future.result())
+        # self.futures = list(not_done)
+        #
+        for future in self.futures:
+            if future.done():
+                self.futures.remove(future)
+
+    async def loop(self, loop):
+        while not self.stopped:
+            await asyncio.sleep(0)
+            logger.debug('waiting for message in %s', ','.join(self.queue_keys))
+            message = await self.redis_master.brpop(*self.queue_keys, timeout=SLEEP)
+
+            await asyncio.sleep(0)
+            self.drain()
+            await asyncio.sleep(0)
 
             if message is not None:
                 name, message = message
                 # We were replaced, requeue the message
                 if self.replaced:
-                    self.redis_server.lpush(name, message)
+                    self.redis_master.lpush(name, message)
                     return
 
                 name = name.rsplit(':', 1)[0]
-                self.execute(name, message)
+                self.futures.append(asyncio.ensure_future(self.execute(name, message), loop=loop))
+                await asyncio.sleep(0)
+            else:
+                logger.debug('no message')
 
     @classmethod
     def get_type_name(cls, object_):
@@ -498,10 +559,22 @@ class Server(RedisBase):
         type_ = reverse_classes.get(type_, type_)
         return type_
 
-    def execute(self, name, message):
+    # def execute(self, name, message):
+    #     try:
+    #         loop = asyncio.get_event_loop()
+    #     except RuntimeError:
+    #         loop = asyncio.new_event_loop()
+    #         asyncio.set_event_loop(loop)
+    #
+    #     loop.run_until_complete(self._execute(name, message))
+
+    async def execute(self, name, message):
+        log = dict()
         logger.debug('RPC Request: %s' % message)
         transport, rpc_request = decode_message(message)
         response_queue = rpc_request['response_queue']
+
+        log['request'] = message
 
         function_call = FunctionCall.from_dict(rpc_request['function_call'])
         start = datetime.now()
@@ -510,56 +583,68 @@ class Server(RedisBase):
             local_object = self.local_objects[name]
             method = getattr(local_object, function_call['name'])
             with redisrpc_duration.labels(method=function_call['name']).time():
-                response = method(
-                    *function_call['args'],
-                    **function_call['kwargs'])
+                if inspect.iscoroutinefunction(method):
+                    log['async'] = True
+                    response = await method(
+                        *function_call['args'],
+                        **function_call['kwargs'])
+                else:
+                    logger.warning('%r is not an async method', method)
+                    log['async'] = False
+                    response = method(
+                        *function_call['args'],
+                        **function_call['kwargs'])
+
+                await asyncio.sleep(0)
+                # if inspect.iscoroutine(response):
+                #     log['async_response'] = True
+                #     response = await response
 
             rpc_response = dict(
                 return_type=self.get_type_name(response),
                 return_value=response,
+                duration=datetime.now() - start,
             )
-            log = logger.info
+            if hasattr(response, 'status'):
+                rpc_response['return_status'] = response.status
+
+            logfunc = logger.info
         except Exception as e:
-            log = logger.error
+            logfunc = logger.error
             logger.exception('Error while executing %r: %r' % (
                 function_call, e))
+
+            trace = traceback.format_exc()
+            if len(trace) > 65535:
+                trace = trace[:32765] + '...' + trace[-32765:]
+
             rpc_response = dict(
                 exception=str(e),
                 exception_type=self.get_type_name(e),
-                exception_trace=traceback.format_exc(),
+                exception_trace=trace,
             )
+            if hasattr(e, 'getResponse'):
+                response = e.getResponse()
+                if hasattr(response, 'status'):
+                    rpc_response['return_status'] = response.status
+                rpc_response['return_value'] = response
+                rpc_response['return_type'] = self.get_type_name(response)
+
             duration = datetime.now() - start
             redisrpc_exception_duration.labels(
                 method=function_call['name'],
                 exception=type(e).__name__,
             ).observe(duration.total_seconds())
         message = transport.dumps(rpc_response)
-        log('RPC Response: %s' % message)
+        response_repr = truncated_repr(transport.loads(message))
+        log['response'] = response_repr
+        logfunc('RPC: %s :: %s', log['request'], log['response'])
+        # logfunc('RPC Response: %s' % response_repr)
 
-        with self.redis_server.pipeline() as pipe:
-            pipe.lpush(response_queue, message)
-            pipe.expire(response_queue, RESULTS_EXPIRE)
-            pipe.execute()
-
-
-class AsyncServer(Server):
-
-    def loop(self):
-        import asyncio
-        from concurrent import futures
-        self.event_loop = loop = asyncio.get_event_loop()
-
-        self.executor = futures.ThreadPoolExecutor(256)
-
-        loop.run_until_complete(Server.loop(self))
-
-    def execute(self, worker_name, message):
-        if worker_name == 'manager':
-            Server.execute(self, worker_name, message)
-        else:
-            import asyncio
-            asyncio.ensure_future(self.event_loop.run_in_executor(
-                self.executor, Server.execute, self, worker_name, message))
+        pipe = self.redis_master.pipeline()
+        pipe.lpush(response_queue, message)
+        pipe.expire(response_queue, RESULTS_EXPIRE)
+        await pipe.execute()
 
 
 def native(value):
@@ -580,6 +665,7 @@ reverse_classes = {
     'bool': 'boolean',
     'str': 'string',
     'OrderedDict': 'dict',
+    'GenericResponse': 'Response',
 }
 
 
