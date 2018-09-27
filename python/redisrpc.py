@@ -12,6 +12,7 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
+import functools
 import sys
 import json
 import pprint
@@ -47,6 +48,8 @@ assert pprint
 def json_default(value):
     if isinstance(value, FromNameMixin):
         return value.__dict__
+    elif isinstance(value, bytes):
+        return value.decode()
     elif isinstance(value, logging.Logger):
         return value.name
     elif isinstance(value, datetime):
@@ -154,32 +157,6 @@ def truncated_repr(response):
 def random_string(size=8, chars=string.ascii_uppercase + string.digits):
     '''Ref: http://stackoverflow.com/questions/2257441'''
     return ''.join(random.choice(chars) for x in range(size))
-
-
-class curry:
-    '''functools.partial with proper repr()'''
-
-    def __init__(self, function, *args, **kwargs):
-        self.function = function
-        self.pending = args[:]
-        self.kwargs = kwargs.copy()
-
-    def __repr__(self):
-        args = []
-        if self.pending:
-            args.append(repr(self.pending))
-        if self.kwargs:
-            args.append(repr(self.kwargs))
-
-        return '<%s %s>' % (self.function.__name__, ' '.join(args))
-
-    def __call__(self, *args, **kwargs):
-        if kwargs and self.kwargs:
-            kw = self.kwargs.copy()
-            kw.update(kwargs)
-        else:
-            kw = kwargs or self.kwargs
-            return self.function(*(self.pending + args), **kw)
 
 
 class FunctionCall(dict):
@@ -323,13 +300,12 @@ class RedisBase(object):
 class Client(RedisBase):
     '''Calls remote functions using Redis as a message queue.'''
 
-    def __init__(
-            self,
-            name,
-            redis_name,
-            redis_sentinel,
-            timeout=TIMEOUT,
-            transport='json'):
+    def __init__(self, name,
+                 timeout=TIMEOUT,
+                 transport='json',
+                 redis_pool=None,
+                 redis_name=None,
+                 redis_sentinel=None):
         self.name = name
         self.timeout = timeout
 
@@ -340,7 +316,7 @@ class Client(RedisBase):
         else:
             raise Exception('invalid transport {0}'.format(transport))
 
-        RedisBase.__init__(self, redis_name=redis_name, redis_sentinel=redis_sentinel)
+        RedisBase.__init__(self, redis_pool=redis_pool, redis_name=redis_name, redis_sentinel=redis_sentinel)
 
     def has_subscribers(self, queue):
         return self.redis_slave.exists(self.get_activity_key(queue))
@@ -393,6 +369,40 @@ class Client(RedisBase):
         response_repr['call'] = str(function_call)
 
         logger.info('' % function_call, dict(rpc_responses=[response_repr]))
+        response = self.process_response(rpc_response)
+
+        if 'exception' in rpc_response:
+            if rpc_response.get('exception_type'):
+                exception_name = rpc_response['exception_type']
+            else:
+                exception_name = 'RemoteException'
+
+            redisrpc_exception_duration.labels(
+                method=method_name,
+                exception=exception_name,
+            ).observe(duration.total_seconds())
+
+            raise self.process_exception(method_name, response, rpc_response)
+        else:
+            redisrpc_duration.labels(method=method_name).observe(
+                duration.total_seconds())
+            return response
+
+    @classmethod
+    def process_exception(cls, response, rpc_response):
+        if rpc_response.get('exception_type'):
+            Exception = RemoteException.from_name(
+                rpc_response['exception_type'])
+        else:
+            Exception = RemoteException
+
+        exception = Exception(rpc_response['exception'])
+        exception.response = response
+        logger.exception(repr(exception))
+        return exception
+
+    @staticmethod
+    def process_response(rpc_response):
         if 'return_value' in rpc_response:
             if rpc_response.get('return_type'):
                 Class_ = Response.from_name(rpc_response.get('return_type'))
@@ -402,33 +412,11 @@ class Client(RedisBase):
             response = Class_(rpc_response['return_value'])
         else:
             response = None
-
-        if 'exception' in rpc_response:
-            if rpc_response.get('exception_type'):
-                Exception = RemoteException.from_name(
-                    rpc_response['exception_type'])
-                exception_name = rpc_response['exception_type']
-            else:
-                Exception = RemoteException
-                exception_name = 'RemoteException'
-
-            exception = Exception(rpc_response['exception'])
-            exception.response = response
-            logger.exception(repr(exception))
-
-            redisrpc_exception_duration.labels(
-                method=method_name,
-                exception=exception_name,
-            ).observe(duration.total_seconds())
-            raise exception
-        else:
-            redisrpc_duration.labels(method=method_name).observe(
-                duration.total_seconds())
-            return response
+        return response
 
     def __getattr__(self, name):
         '''Treat missing attributes as remote method call invocations.'''
-        return curry(self.call, name)
+        return functools.partial(self.call, name)
 
 
 class Server(RedisBase):
@@ -579,6 +567,7 @@ class Server(RedisBase):
         function_call = FunctionCall.from_dict(rpc_request['function_call'])
         start = datetime.now()
 
+        rpc_response = dict()
         try:
             local_object = self.local_objects[name]
             method = getattr(local_object, function_call['name'])
@@ -600,13 +589,8 @@ class Server(RedisBase):
                 #     log['async_response'] = True
                 #     response = await response
 
-            rpc_response = dict(
-                return_type=self.get_type_name(response),
-                return_value=response,
-                duration=datetime.now() - start,
-            )
-            if hasattr(response, 'status'):
-                rpc_response['return_status'] = response.status
+            rpc_response.update(self.process_response(response))
+            rpc_response['duration'] = datetime.now() - start
 
             logfunc = logger.info
         except Exception as e:
@@ -618,17 +602,8 @@ class Server(RedisBase):
             if len(trace) > 65535:
                 trace = trace[:32765] + '...' + trace[-32765:]
 
-            rpc_response = dict(
-                exception=str(e),
-                exception_type=self.get_type_name(e),
-                exception_trace=trace,
-            )
-            if hasattr(e, 'getResponse'):
-                response = e.getResponse()
-                if hasattr(response, 'status'):
-                    rpc_response['return_status'] = response.status
-                rpc_response['return_value'] = response
-                rpc_response['return_type'] = self.get_type_name(response)
+            rpc_response = self.process_exception(e, rpc_response)
+            rpc_response['exception_trace'] = trace
 
             duration = datetime.now() - start
             redisrpc_exception_duration.labels(
@@ -645,6 +620,27 @@ class Server(RedisBase):
         pipe.lpush(response_queue, message)
         pipe.expire(response_queue, RESULTS_EXPIRE)
         await pipe.execute()
+
+    @classmethod
+    def process_exception(cls, exception, rpc_response):
+        if hasattr(exception, 'getResponse'):
+            rpc_response.update(cls.process_response(exception.getResponse()))
+
+        rpc_response['exception'] = str(exception)
+        rpc_response['exception_type'] = cls.get_type_name(exception)
+
+        return rpc_response
+
+    @classmethod
+    def process_response(cls, response) -> dict:
+        rpc_response = dict(
+            return_type=cls.get_type_name(response),
+            return_value=response,
+        )
+        if hasattr(response, 'status'):
+            rpc_response['return_status'] = response.status
+
+        return rpc_response
 
 
 def native(value):
