@@ -654,6 +654,7 @@ default_classes = {
     'string': lambda s: s,
     'tuple': tuple,
     'dict': dict,
+    'list': list,
     'OrderedDict': collections.OrderedDict,
 }
 reverse_classes = {
@@ -676,7 +677,10 @@ class FromNameMixin(object):
                 self.__dict__.update(data)
             else:
                 logger.error(
-                    'Unexpected data for %s: %r', self.__class__, data)
+                    'Unexpected data for %s: %s',
+                    self.__class__,
+                    pprint.pformat(data),
+                )
 
     def get(self, key, default=None):
         return getattr(self, str(key), default)
@@ -698,11 +702,11 @@ class FromNameMixin(object):
         if key not in cls.classes:
             cls.classes[key] = type(key, (cls,), dict(parent=cls))
 
-        Class_ = cls.classes[key]
+        Class = cls.classes[key]
         if keys:
-            return Class_.from_name(*keys)
+            return Class.from_name(*keys)
         else:
-            return Class_
+            return Class
 
 
 class Response(FromNameMixin):
