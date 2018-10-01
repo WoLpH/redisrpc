@@ -382,7 +382,7 @@ class Client(RedisBase):
                 exception=exception_name,
             ).observe(duration.total_seconds())
 
-            raise self.process_exception(method_name, response, rpc_response)
+            raise self.process_exception(response, rpc_response)
         else:
             redisrpc_duration.labels(method=method_name).observe(
                 duration.total_seconds())
@@ -474,7 +474,7 @@ class Server(RedisBase):
 
             for key in self.activity_keys:
                 # Add 5 seconds margin to be safe
-                pipe.setex(key, sleep + 5, now)
+                pipe.setex(key, sleep + 60, now)
 
             # asyncio.run_coroutine_threadsafe(
             #     pipe.execute(),
@@ -532,7 +532,7 @@ class Server(RedisBase):
                 name, message = message
                 # We were replaced, requeue the message
                 if self.replaced:
-                    self.redis_master.lpush(name, message)
+                    await self.redis_master.lpush(name, message)
                     return
 
                 name = name.rsplit(':', 1)[0]
